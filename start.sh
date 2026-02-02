@@ -1,8 +1,14 @@
-#!/bin/sh
-python manage.py migrate --noinput
-gunicorn config.wsgi:application --bind 0.0.0.0:$PORT
-set -e
+#!/bin/bash
 
-cd backend
-python3 manage.py migrate --noinput
-python3 -m gunicorn config.wsgi:application --bind 0.0.0.0:$PORT
+# Install dependencies (optional if platform does it automatically)
+pip install --upgrade pip
+pip install -r requirements.txt
+
+# Run migrations
+python manage.py migrate
+
+# Collect static files
+python manage.py collectstatic --noinput
+
+# Start Gunicorn server
+gunicorn backend.wsgi:application --bind 0.0.0.0:$PORT
