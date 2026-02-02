@@ -10,3 +10,6 @@ PyJWT==2.11.0
 sqlparse==0.5.5
 typing_extensions==4.15.0
 whitenoise==6.11.0
+gunicorn
+psycopg[binary]
+dj-database-url
