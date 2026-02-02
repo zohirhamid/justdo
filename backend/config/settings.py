@@ -2,6 +2,7 @@ from pathlib import Path
 from datetime import timedelta
 import environ
 import os
+import dj_database_url
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -13,11 +14,11 @@ env = environ.Env(
 # Read .env file
 environ.Env.read_env(BASE_DIR / '.env')
 
-SECRET_KEY = env('SECRET_KEY')
+SECRET_KEY = env('SECRET_KEY', default='insecure-development-key')
 
 DEBUG = env('DEBUG')
 
-ALLOWED_HOSTS = ["*"]
+ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["*"])
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -57,10 +58,9 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 # React (Vite) build folder
 FRONTEND_DIR = BASE_DIR.parent / 'frontend' / 'dist'
+FRONTEND_ASSETS_DIR = FRONTEND_DIR / 'assets'
 
-STATICFILES_DIRS = [
-    FRONTEND_DIR / 'assets',
-]
+STATICFILES_DIRS = [FRONTEND_ASSETS_DIR] if FRONTEND_ASSETS_DIR.exists() else []
 
 TEMPLATES = [
     {
@@ -80,16 +80,31 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'config.wsgi.application'
 
-DATABASES = {
-    "default": {
-        "ENGINE": os.environ.get("DB_ENGINE"),
-        "NAME": os.environ.get("DB_NAME"),
-        "USER": os.environ.get("DB_USER"),
-        "PASSWORD": os.environ.get("DB_PASSWORD"),
-        "HOST": os.environ.get("DB_HOST"),
-        "PORT": os.environ.get("DB_PORT"),
+database_url = os.environ.get("DATABASE_URL")
+db_engine = os.environ.get("DB_ENGINE")
+
+if database_url:
+    DATABASES = {
+        "default": dj_database_url.parse(database_url, conn_max_age=600),
     }
-}
+elif db_engine:
+    DATABASES = {
+        "default": {
+            "ENGINE": db_engine,
+            "NAME": os.environ.get("DB_NAME"),
+            "USER": os.environ.get("DB_USER"),
+            "PASSWORD": os.environ.get("DB_PASSWORD"),
+            "HOST": os.environ.get("DB_HOST"),
+            "PORT": os.environ.get("DB_PORT"),
+        }
+    }
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
+        }
+    }
 
 
 AUTH_PASSWORD_VALIDATORS = [
@@ -126,6 +141,4 @@ SIMPLE_JWT = {
 }
 
 # CORS
-CORS_ALLOWED_ORIGINS = env.list(
-    'CORS_ALLOWED_ORIGINS',
-)
+CORS_ALLOWED_ORIGINS = env.list('CORS_ALLOWED_ORIGINS', default=[])
