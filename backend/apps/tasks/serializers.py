@@ -10,16 +10,15 @@ class TaskSerializer(serializers.ModelSerializer):
         read_only_fields = ('id', 'created_at')
 
     def create(self, validated_data):
-        validated_data['user'] = self.context['request'].user
-        
-        # Set order to 0 (top of list) for new tasks
+        user = self.context['request'].user
+        print("Creating task for user:", user)
+        print("Validated data:", validated_data)
+
+        validated_data['user'] = user
         validated_data['order'] = 0
-        
-        # Increment order of existing tasks
-        Task.objects.filter(user=validated_data['user']).update(
-            order=models.F('order') + 1
-        )
-        
+
+        Task.objects.filter(user=user).update(order=models.F('order') + 1)
+
         return super().create(validated_data)
 
 

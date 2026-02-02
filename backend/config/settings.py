@@ -1,17 +1,23 @@
-import os
 from pathlib import Path
 from datetime import timedelta
-from dotenv import load_dotenv
-
-load_dotenv()
+import environ
+import os
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
+# Initialise environ
+env = environ.Env(
+    DEBUG=(bool, False)
+)
 
-DEBUG = os.getenv('DEBUG', 'True') == 'True'
+# Read .env file
+environ.Env.read_env(BASE_DIR / '.env')
 
-ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+SECRET_KEY = env('SECRET_KEY')
+
+DEBUG = env('DEBUG')
+
+ALLOWED_HOSTS = env.list('ALLOWED_HOSTS')
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -20,12 +26,12 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    
+
     # Third party
     'rest_framework',
     'rest_framework_simplejwt',
     'corsheaders',
-    
+
     # Local apps
     'apps.users',
     'apps.tasks',
@@ -34,6 +40,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -44,10 +51,21 @@ MIDDLEWARE = [
 
 ROOT_URLCONF = 'config.urls'
 
+# Static files
+STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+
+# React (Vite) build folder
+FRONTEND_DIR = BASE_DIR.parent / 'frontend' / 'dist'
+
+STATICFILES_DIRS = [
+    FRONTEND_DIR / 'assets',
+]
+
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [FRONTEND_DIR],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -63,10 +81,7 @@ TEMPLATES = [
 WSGI_APPLICATION = 'config.wsgi.application'
 
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
-    }
+    'default': env.db()
 }
 
 AUTH_PASSWORD_VALIDATORS = [
@@ -85,7 +100,7 @@ STATIC_URL = 'static/'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# REST Framework
+# DRF
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
@@ -95,7 +110,7 @@ REST_FRAMEWORK = {
     ),
 }
 
-# JWT Settings
+# JWT
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=30),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
@@ -103,7 +118,6 @@ SIMPLE_JWT = {
 }
 
 # CORS
-CORS_ALLOWED_ORIGINS = os.getenv(
-    'CORS_ALLOWED_ORIGINS', 
-    'http://localhost:5173,http://127.0.0.1:5173'
-).split(',')
+CORS_ALLOWED_ORIGINS = env.list(
+    'CORS_ALLOWED_ORIGINS',
+)
