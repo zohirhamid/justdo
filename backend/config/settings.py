@@ -54,6 +54,7 @@ ROOT_URLCONF = 'config.urls'
 # Static files
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
+STATIC_ROOT.mkdir(parents=True, exist_ok=True)
 
 TEMPLATES = [
     {
