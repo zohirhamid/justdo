@@ -1,6 +1,33 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useTasks } from '../hooks/useTasks';
+
+const toIsoDate = (date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const getWeekDays = () => {
+  const today = new Date();
+  const dayOfWeek = today.getDay(); // 0 sunday
+  const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+  const monday = new Date(today);
+  monday.setDate(today.getDate() + mondayOffset);
+
+  return Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(monday);
+    date.setDate(monday.getDate() + index);
+    return {
+      date,
+      iso: toIsoDate(date),
+      label: date.toLocaleDateString(undefined, { weekday: 'short' }),
+      dayNumber: date.getDate(),
+      isToday: toIsoDate(today) === toIsoDate(date),
+    };
+  });
+};
 
 const Tasks = () => {
   const { user, logout } = useAuth();
@@ -12,41 +39,54 @@ const Tasks = () => {
   const [filterTag, setFilterTag] = useState(null);
   const [draggedId, setDraggedId] = useState(null);
   const [dragOverId, setDragOverId] = useState(null);
+  const [dragOverDay, setDragOverDay] = useState(null);
   const [isDark, setIsDark] = useState(true);
 
-  const theme = isDark ? {
-    bg: '#0a0a0a',
-    bgCard: '#111',
-    text: '#e5e5e5',
-    textMuted: '#888',
-    textDim: '#555',
-    textDimmer: '#333',
-    border: '#1a1a1a',
-    borderLight: '#222',
-    accent: '#eab308',
-    accentMuted: 'rgba(234, 179, 8, 0.15)',
-    done: '#0d0d0d',
-    doneText: '#444',
-    dragHandle: '#333',
-  } : {
-    bg: '#fafafa',
-    bgCard: '#fff',
-    text: '#1a1a1a',
-    textMuted: '#666',
-    textDim: '#999',
-    textDimmer: '#ccc',
-    border: '#e5e5e5',
-    borderLight: '#eee',
-    accent: '#b8960a',
-    accentMuted: 'rgba(184, 150, 10, 0.12)',
-    done: '#fafafa',
-    doneText: '#bbb',
-    dragHandle: '#ccc',
-  };
-
-  const allTags = [...new Set(tasks.map(t => t.tag).filter(Boolean))];
-  const filteredTasks = filterTag ? tasks.filter(t => t.tag === filterTag) : tasks;
-  const pendingCount = tasks.filter(t => !t.done).length;
+  const theme = isDark
+    ? {
+        bg: '#0a0a0a',
+        bgCard: '#111',
+        text: '#e5e5e5',
+        textMuted: '#888',
+        textDim: '#555',
+        textDimmer: '#333',
+        border: '#1a1a1a',
+        borderLight: '#222',
+        accent: '#eab308',
+        accentMuted: 'rgba(234, 179, 8, 0.15)',
+        done: '#0d0d0d',
+        doneText: '#444',
+        dragHandle: '#333',
+      }
+    : {
+        bg: '#fafafa',
+        bgCard: '#fff',
+        text: '#1a1a1a',
+        textMuted: '#666',
+        textDim: '#999',
+        textDimmer: '#ccc',
+        border: '#e5e5e5',
+        borderLight: '#eee',
+        accent: '#b8960a',
+        accentMuted: 'rgba(184, 150, 10, 0.12)',
+        done: '#fafafa',
+        doneText: '#bbb',
+        dragHandle: '#ccc',
+      };
+    
+  const weekDays = useMemo(() => getWeekDays(), []);
+  const allTags = [...new Set(tasks.map((t) => t.tag).filter(Boolean))];
+  const baseFilteredTasks = filterTag ? tasks.filter((t) => t.tag === filterTag) : tasks;
+  const filteredTasks = baseFilteredTasks.filter((t) => !t.scheduled_for);
+  const pendingCount = tasks.filter((t) => !t.done).length;
+  
+  const tasksByDay = useMemo(() => {
+    const grouped = {};
+    weekDays.forEach((day) => {
+      grouped[day.iso] = baseFilteredTasks.filter((task) => task.scheduled_for === day.iso);
+    });
+    return grouped;
+  }, [baseFilteredTasks, weekDays]);
 
   const handleAddTask = async () => {
     if (!newTask.trim()) return;
@@ -69,8 +109,8 @@ const Tasks = () => {
     e.preventDefault();
     if (draggedId === targetId) return;
 
-    const draggedIndex = tasks.findIndex(t => t.id === draggedId);
-    const targetIndex = tasks.findIndex(t => t.id === targetId);
+    const draggedIndex = tasks.findIndex((t) => t.id === draggedId);
+    const targetIndex = tasks.findIndex((t) => t.id === targetId);
 
     const newTasks = [...tasks];
     const [draggedTask] = newTasks.splice(draggedIndex, 1);
@@ -81,9 +121,19 @@ const Tasks = () => {
     setDragOverId(null);
   };
 
+  const handleDropOnDay = async (e, isoDate) => {
+    e.preventDefault();
+    if (!draggedId) return;
+    await updateTask(draggedId, { scheduled_for: isoDate });
+    setDraggedId(null);
+    setDragOverId(null);
+    setDragOverDay(null);
+  };
+
   const handleDragEnd = () => {
     setDraggedId(null);
     setDragOverId(null);
+    setDragOverDay(null);
   };
 
   const handleUpdateTag = async (id, tag) => {
@@ -93,28 +143,32 @@ const Tasks = () => {
 
   if (loading) {
     return (
-      <div style={{ 
-        minHeight: '100vh', 
-        backgroundColor: theme.bg, 
-        display: 'flex', 
-        alignItems: 'center', 
-        justifyContent: 'center',
-        color: theme.textDim 
-      }}>
+      <div
+        style={{
+          minHeight: '100vh',
+          backgroundColor: theme.bg,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: theme.textDim,
+        }}
+      >
         Loading...
       </div>
     );
   }
 
   return (
-    <div style={{
-      minHeight: '100vh',
-      backgroundColor: theme.bg,
-      color: theme.text,
-      fontFamily: '"JetBrains Mono", "SF Mono", monospace',
-      padding: '40px 24px',
-      transition: 'background-color 0.2s ease',
-    }}>
+    <div
+      style={{
+        minHeight: '100vh',
+        backgroundColor: theme.bg,
+        color: theme.text,
+        fontFamily: '"JetBrains Mono", "SF Mono", monospace',
+        padding: '40px 24px',
+        transition: 'background-color 0.2s ease',
+      }}
+    >
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500&display=swap');
         * { box-sizing: border-box; }
@@ -123,32 +177,30 @@ const Tasks = () => {
         .task-row:hover .drag-handle { opacity: 1; }
       `}</style>
 
-      <div style={{ maxWidth: '600px', margin: '0 auto' }}>
-        {/* Header */}
-        <header style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'flex-end',
-          marginBottom: '32px',
-          paddingBottom: '20px',
-          borderBottom: `1px solid ${theme.border}`,
-        }}>
+      <div style={{ maxWidth: '900px', margin: '0 auto' }}>
+        <header
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'flex-end',
+            marginBottom: '32px',
+            paddingBottom: '20px',
+            borderBottom: `1px solid ${theme.border}`,
+          }}
+        >
           <div>
-            <div style={{
-              fontSize: '9px',
-              letterSpacing: '3px',
-              color: theme.textDim,
-              textTransform: 'uppercase',
-              marginBottom: '6px',
-            }}>
+            <div
+              style={{
+                fontSize: '9px',
+                letterSpacing: '3px',
+                color: theme.textDim,
+                textTransform: 'uppercase',
+                marginBottom: '6px',
+              }}
+            >
               JustDo · {user?.username}
             </div>
-            <h1 style={{
-              fontSize: '24px',
-              fontWeight: '300',
-              margin: 0,
-              color: isDark ? '#fff' : '#000',
-            }}>
+            <h1 style={{ fontSize: '24px', fontWeight: '300', margin: 0, color: isDark ? '#fff' : '#000' }}>
               {pendingCount} <span style={{ color: theme.textDim, fontSize: '14px' }}>pending</span>
             </h1>
           </div>
@@ -183,7 +235,50 @@ const Tasks = () => {
           </div>
         </header>
 
-        {/* Add Task */}
+        <section style={{ marginBottom: '24px' }}>
+          <div style={{ fontSize: '10px', color: theme.textDim, marginBottom: '8px', letterSpacing: '1px' }}>UPCOMING · WEEK</div>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
+              gap: '8px',
+            }}
+          >
+            {weekDays.map((day) => (
+              <div
+                key={day.iso}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDragOverDay(day.iso);
+                }}
+                onDragLeave={() => setDragOverDay(null)}
+                onDrop={(e) => handleDropOnDay(e, day.iso)}
+                style={{
+                  minHeight: '90px',
+                  padding: '10px',
+                  border: `1px solid ${dragOverDay === day.iso ? theme.accent : theme.borderLight}`,
+                  background: dragOverDay === day.iso ? theme.accentMuted : theme.bgCard,
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <span style={{ fontSize: '10px', color: day.isToday ? theme.accent : theme.textDim }}>{day.label}</span>
+                  <span style={{ fontSize: '10px', color: day.isToday ? theme.accent : theme.textMuted }}>{day.dayNumber}</span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  {(tasksByDay[day.iso] || []).slice(0, 3).map((task) => (
+                    <div key={task.id} style={{ fontSize: '10px', color: task.done ? theme.doneText : theme.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      • {task.text}
+                    </div>
+                  ))}
+                  {(tasksByDay[day.iso] || []).length > 3 && (
+                    <div style={{ fontSize: '10px', color: theme.textDim }}>+{tasksByDay[day.iso].length - 3} more</div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
         <div style={{ display: 'flex', gap: '8px', marginBottom: '24px' }}>
           <input
             type="text"
@@ -233,7 +328,6 @@ const Tasks = () => {
           </button>
         </div>
 
-        {/* Tag Filters */}
         {allTags.length > 0 && (
           <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '20px' }}>
             <button
@@ -249,7 +343,7 @@ const Tasks = () => {
             >
               all
             </button>
-            {allTags.map(tag => (
+            {allTags.map((tag) => (
               <button
                 key={tag}
                 onClick={() => setFilterTag(filterTag === tag ? null : tag)}
@@ -268,7 +362,7 @@ const Tasks = () => {
           </div>
         )}
 
-        {/* Task List */}
+        
         <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
           {filteredTasks.map((task) => (
             <div
@@ -285,27 +379,16 @@ const Tasks = () => {
                 alignItems: 'center',
                 gap: '12px',
                 padding: '14px 16px',
-                backgroundColor: dragOverId === task.id ? theme.accentMuted : (task.done ? theme.done : theme.bgCard),
+                backgroundColor: dragOverId === task.id ? theme.accentMuted : task.done ? theme.done : theme.bgCard,
                 border: `1px solid ${dragOverId === task.id ? theme.accent : theme.borderLight}`,
                 opacity: draggedId === task.id ? 0.5 : 1,
                 transition: 'background-color 0.15s ease, border-color 0.15s ease',
               }}
-            >
-              {/* Drag Handle */}
-              <div
-                className="drag-handle"
-                style={{
-                  cursor: 'grab',
-                  color: theme.dragHandle,
-                  fontSize: '10px',
-                  opacity: 0.6,
-                  userSelect: 'none',
-                }}
-              >
+            >              
+              <div className="drag-handle" style={{ cursor: 'grab', color: theme.dragHandle, fontSize: '10px', opacity: 0.6, userSelect: 'none' }}>
                 ⋮⋮
               </div>
 
-              {/* Checkbox */}
               <button
                 onClick={() => updateTask(task.id, { done: !task.done })}
                 style={{
@@ -323,17 +406,17 @@ const Tasks = () => {
                 {task.done && <span style={{ color: isDark ? '#000' : '#fff', fontSize: '11px' }}>✓</span>}
               </button>
 
-              {/* Task Text */}
-              <span style={{
-                flex: 1,
-                fontSize: '13px',
-                color: task.done ? theme.doneText : theme.text,
-                textDecoration: task.done ? 'line-through' : 'none',
-              }}>
+              <span
+                style={{
+                  flex: 1,
+                  fontSize: '13px',
+                  color: task.done ? theme.doneText : theme.text,
+                  textDecoration: task.done ? 'line-through' : 'none',
+                }}
+              >
                 {task.text}
               </span>
 
-              {/* Tag */}
               {editingTag === task.id ? (
                 <input
                   type="text"
@@ -372,7 +455,6 @@ const Tasks = () => {
                 </button>
               )}
 
-              {/* Delete */}
               <button
                 onClick={() => deleteTask(task.id)}
                 style={{
@@ -390,30 +472,25 @@ const Tasks = () => {
           ))}
         </div>
 
-        {/* Empty State */}
-        {filteredTasks.length === 0 && (
-          <div style={{
-            textAlign: 'center',
-            padding: '48px 24px',
-            color: theme.textDim,
-            fontSize: '13px',
-          }}>
-            {filterTag ? `No tasks tagged "${filterTag}"` : 'No tasks yet'}
-          </div>
-        )}
 
-        {/* Footer */}
-        <footer style={{
-          marginTop: '32px',
-          paddingTop: '20px',
-          borderTop: `1px solid ${theme.border}`,
-          display: 'flex',
-          justifyContent: 'space-between',
-          fontSize: '10px',
-          color: theme.textDim,
-        }}>
+        <div style={{ textAlign: 'center', padding: '48px 24px', color: theme.textDim, fontSize: '13px' }}>
+          {filterTag ? `No unscheduled tasks tagged "${filterTag}"` : 'No unscheduled tasks'}
+        </div>
+        
+
+        <footer
+          style={{
+            marginTop: '32px',
+            paddingTop: '20px',
+            borderTop: `1px solid ${theme.border}`,
+            display: 'flex',
+            justifyContent: 'space-between',
+            fontSize: '10px',
+            color: theme.textDim,
+          }}
+        >
           <span>{tasks.length} total</span>
-          <span>{tasks.filter(t => t.done).length} done</span>
+          <span>{tasks.filter((t) => t.done).length} done</span>
         </footer>
       </div>
     </div>

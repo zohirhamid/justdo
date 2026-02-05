@@ -10,6 +10,7 @@ class Task(models.Model):
     )
     text = models.CharField(max_length=500)
     tag = models.CharField(max_length=50, blank=True, null=True)
+    scheduled_for = models.DateField(blank=True, null=True, db_index=True)
     done = models.BooleanField(default=False)
     order = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
