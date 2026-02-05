@@ -6,4 +6,8 @@ export default defineConfig({
   server: {
     port: 5173,
   },
+  
+  preview: {
+    allowedHosts: ['disciplined-rebirth-production.up.railway.app'],
+  },
 });
