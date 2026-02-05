@@ -18,8 +18,10 @@ const formatDateLabel = (isoDate) => {
 const DayTasks = () => {
   const { date } = useParams();
   const { user, logout } = useAuth();
-  const { tasks, loading, updateTask, deleteTask } = useTasks();
+  const { tasks, loading, updateTask, deleteTask, reorderTasks } = useTasks();
   const [isDark, setIsDark] = useState(true);
+  const [draggedId, setDraggedId] = useState(null);
+  const [dragOverId, setDragOverId] = useState(null);
 
   const theme = isDark
     ? {
@@ -54,6 +56,37 @@ const DayTasks = () => {
     [tasks, date]
   );
 
+  const handleDragStart = (e, id) => {
+    setDraggedId(id);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragOver = (e, id) => {
+    e.preventDefault();
+    if (id !== draggedId) setDragOverId(id);
+  };
+
+  const handleDrop = async (e, targetId) => {
+    e.preventDefault();
+    if (draggedId === targetId) return;
+
+    const draggedIndex = tasks.findIndex((task) => task.id === draggedId);
+    const targetIndex = tasks.findIndex((task) => task.id === targetId);
+
+    const reordered = [...tasks];
+    const [draggedTask] = reordered.splice(draggedIndex, 1);
+    reordered.splice(targetIndex, 0, draggedTask);
+
+    await reorderTasks(reordered);
+    setDraggedId(null);
+    setDragOverId(null);
+  };
+
+  const handleDragEnd = () => {
+    setDraggedId(null);
+    setDragOverId(null);
+  };
+
   if (loading) {
     return (
       <div
@@ -81,6 +114,10 @@ const DayTasks = () => {
         padding: '40px 24px',
       }}
     >
+      <style>{`
+        .day-task-row:hover .drag-handle { opacity: 1; }
+      `}</style>
+
       <div style={{ maxWidth: '900px', margin: '0 auto' }}>
         <header
           style={{
@@ -159,15 +196,28 @@ const DayTasks = () => {
           {dayTasks.map((task) => (
             <div
               key={task.id}
+              className="day-task-row"
+              draggable
+              onDragStart={(e) => handleDragStart(e, task.id)}
+              onDragOver={(e) => handleDragOver(e, task.id)}
+              onDragLeave={() => setDragOverId(null)}
+              onDrop={(e) => handleDrop(e, task.id)}
+              onDragEnd={handleDragEnd}
               style={{
                 display: 'flex',
                 alignItems: 'center',
                 gap: '12px',
                 padding: '14px 16px',
-                backgroundColor: task.done ? theme.done : theme.bgCard,
-                border: `1px solid ${theme.borderLight}`,
+                backgroundColor: dragOverId === task.id ? 'rgba(234, 179, 8, 0.15)' : task.done ? theme.done : theme.bgCard,
+                border: `1px solid ${dragOverId === task.id ? theme.accent : theme.borderLight}`,
+                opacity: draggedId === task.id ? 0.5 : 1,
+                transition: 'background-color 0.15s ease, border-color 0.15s ease',
               }}
             >
+              <div className="drag-handle" style={{ cursor: 'grab', color: theme.textDimmer, fontSize: '10px', opacity: 0.6, userSelect: 'none' }}>
+                ⋮⋮
+              </div>
+              
               <button
                 onClick={() => updateTask(task.id, { done: !task.done })}
                 style={{
