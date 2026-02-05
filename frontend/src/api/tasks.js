@@ -25,3 +25,19 @@ export const tasksApi = {
     return response.data;
   },
 };
+
+export const doneEntriesApi = {
+  getAll: async () => {
+    const response = await client.get('/tasks/done-entries/');
+    return response.data;
+  },
+
+  create: async (payload) => {
+    const response = await client.post('/tasks/done-entries/', payload);
+    return response.data;
+  },
+
+  delete: async (id) => {
+    await client.delete(`/tasks/done-entries/${id}/`);
+  },
+};

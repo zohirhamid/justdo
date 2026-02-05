@@ -12,6 +12,7 @@ A minimal, elegant todo app with drag-and-drop reordering and tags.
 - ✓ Filter by tags
 - ✓ User authentication
 - ✓ Mobile responsive
+- ✓ Daily done list + learning history
 
 ## Tech Stack
 
@@ -80,6 +81,9 @@ Open `http://localhost:5173` in your browser.
 | PATCH | `/api/tasks/:id/` | Update task |
 | DELETE | `/api/tasks/:id/` | Delete task |
 | POST | `/api/tasks/reorder/` | Reorder tasks |
+| GET | `/api/tasks/done-entries/` | List done/learned entries |
+| POST | `/api/tasks/done-entries/` | Add done/learned entry |
+| DELETE | `/api/tasks/done-entries/:id/` | Delete done/learned entry |
 
 ## Project Structure
 ```

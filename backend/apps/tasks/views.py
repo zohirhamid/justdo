@@ -1,11 +1,12 @@
-from rest_framework import viewsets, status
+from rest_framework import status, viewsets
 from rest_framework.decorators import action
-from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from rest_framework import fields   # only needed if you want to compare exactly
-from .models import Task
-from .serializers import TaskSerializer, ReorderSerializer
+from rest_framework.response import Response
+
 from core.permissions import IsOwner
+
+from .models import DoneEntry, Task
+from .serializers import DoneEntrySerializer, ReorderSerializer, TaskSerializer
 
 
 class TaskViewSet(viewsets.ModelViewSet):
@@ -21,34 +22,34 @@ class TaskViewSet(viewsets.ModelViewSet):
         serializer = ReorderSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        # Tell type checker: after successful validation → it's a dict
-        assert isinstance(serializer.validated_data, dict), "validated_data should be dict after is_valid(raise_exception=True)"
-
         task_ids = serializer.validated_data['task_ids']
-
-        # Existence + ownership check (using values_list is efficient)
         existing_ids = set(
-            Task.objects.filter(
-                user=request.user,
-                id__in=task_ids
-            ).values_list('id', flat=True)
+            Task.objects.filter(user=request.user, id__in=task_ids).values_list('id', flat=True)
         )
 
         if len(existing_ids) != len(task_ids):
             return Response(
-                {"error": "Some task IDs are invalid or do not belong to you"},
-                status=status.HTTP_400_BAD_REQUEST
+                {'error': 'Some task IDs are invalid or do not belong to you'},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Optional: early exit if list is empty (depends on your business rule)
         if not task_ids:
-            return Response({"status": "ok"})
+            return Response({'status': 'ok'})
 
-        # Bulk update in a transaction-safe way
         for index, task_id in enumerate(task_ids):
-            Task.objects.filter(
-                id=task_id,           # already checked → safe
-                user=request.user     # extra defense in depth
-            ).update(order=index)
+            Task.objects.filter(id=task_id, user=request.user).update(order=index)
 
-        return Response({"status": "ok"})
+        return Response({'status': 'ok'})
+
+
+class DoneEntryViewSet(viewsets.ModelViewSet):
+    serializer_class = DoneEntrySerializer
+    permission_classes = [IsAuthenticated, IsOwner]
+    queryset = DoneEntry.objects.all()
+
+    def get_queryset(self):
+        queryset = super().get_queryset().filter(user=self.request.user)
+        date_param = self.request.query_params.get('entry_date')
+        if date_param:
+            queryset = queryset.filter(entry_date=date_param)
+        return queryset

@@ -1,16 +1,21 @@
-import { useState, useEffect, useCallback } from 'react';
-import { tasksApi } from '../api/tasks';
+import { useCallback, useEffect, useState } from 'react';
+import { doneEntriesApi, tasksApi } from '../api/tasks';
 
 export const useTasks = () => {
   const [tasks, setTasks] = useState([]);
+  const [doneEntries, setDoneEntries] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
   const fetchTasks = useCallback(async () => {
     try {
       setLoading(true);
-      const data = await tasksApi.getAll();
-      setTasks(data);
+      const [tasksData, doneEntriesData] = await Promise.all([
+        tasksApi.getAll(),
+        doneEntriesApi.getAll(),
+      ]);
+      setTasks(tasksData);
+      setDoneEntries(doneEntriesData);
       setError(null);
     } catch (err) {
       setError(err.message);
@@ -31,7 +36,7 @@ export const useTasks = () => {
 
   const updateTask = async (id, data) => {
     const updated = await tasksApi.update(id, data);
-    setTasks(tasks.map(t => t.id === id ? updated : t));
+    setTasks(tasks.map(t => (t.id === id ? updated : t)));
     return updated;
   };
 
@@ -42,7 +47,7 @@ export const useTasks = () => {
 
   const reorderTasks = async (newOrder) => {
     setTasks(newOrder);
-    
+
     try {
       await tasksApi.reorder(newOrder.map(t => t.id));
     } catch (err) {
@@ -51,14 +56,28 @@ export const useTasks = () => {
     }
   };
 
+  const addDoneEntry = async (payload) => {
+    const newEntry = await doneEntriesApi.create(payload);
+    setDoneEntries([newEntry, ...doneEntries]);
+    return newEntry;
+  };
+
+  const deleteDoneEntry = async (id) => {
+    await doneEntriesApi.delete(id);
+    setDoneEntries(doneEntries.filter(entry => entry.id !== id));
+  };
+
   return {
     tasks,
+    doneEntries,
     loading,
     error,
     addTask,
     updateTask,
     deleteTask,
     reorderTasks,
+    addDoneEntry,
+    deleteDoneEntry,
     refetch: fetchTasks,
   };
 };
