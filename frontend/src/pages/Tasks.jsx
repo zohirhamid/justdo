@@ -1,6 +1,8 @@
 import React, { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useTasks } from '../hooks/useTasks';
+
 
 const toIsoDate = (date) => {
   const year = date.getFullYear();
@@ -245,8 +247,9 @@ const Tasks = () => {
             }}
           >
             {weekDays.map((day) => (
-              <div
+              <Link
                 key={day.iso}
+                to={`/day/${day.iso}`}
                 onDragOver={(e) => {
                   e.preventDefault();
                   setDragOverDay(day.iso);
@@ -258,6 +261,8 @@ const Tasks = () => {
                   padding: '10px',
                   border: `1px solid ${dragOverDay === day.iso ? theme.accent : theme.borderLight}`,
                   background: dragOverDay === day.iso ? theme.accentMuted : theme.bgCard,
+                  textDecoration: 'none',
+                  display: 'block',
                 }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
@@ -274,7 +279,7 @@ const Tasks = () => {
                     <div style={{ fontSize: '10px', color: theme.textDim }}>+{tasksByDay[day.iso].length - 3} more</div>
                   )}
                 </div>
-              </div>
+              </Link>
             ))}
           </div>
         </section>

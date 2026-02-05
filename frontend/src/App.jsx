@@ -51,6 +51,9 @@ const App = () => {
           <Route path="/" element={
             <ProtectedRoute><Tasks /></ProtectedRoute>
           } />
+          <Route path="/day/:date" element={
+            <ProtectedRoute><DayTasks /></ProtectedRoute>
+          } />
         </Routes>
       </BrowserRouter>
     </AuthProvider>
