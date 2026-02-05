@@ -17,7 +17,7 @@ class Task(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ['order', '-created_at']
+        ordering = ['order', 'created_at']
 
     def __str__(self):
         return f"{self.text[:50]}{'...' if len(self.text) > 50 else ''}"

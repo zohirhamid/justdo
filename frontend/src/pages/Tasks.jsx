@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useTasks } from '../hooks/useTasks';
 
@@ -32,6 +32,7 @@ const getWeekDays = () => {
 };
 
 const Tasks = () => {
+  const navigate = useNavigate();
   const { user, logout } = useAuth();
   const { tasks, loading, addTask, updateTask, deleteTask, reorderTasks } = useTasks();
   
@@ -130,6 +131,11 @@ const Tasks = () => {
     setDraggedId(null);
     setDragOverId(null);
     setDragOverDay(null);
+  };
+
+  const handleDayOpen = (isoDate) => {
+    if (draggedId) return;
+    navigate(`/day/${isoDate}`);
   };
 
   const handleDragEnd = () => {
@@ -247,9 +253,17 @@ const Tasks = () => {
             }}
           >
             {weekDays.map((day) => (
-              <Link
+              <div
                 key={day.iso}
-                to={`/day/${day.iso}`}
+                role="button"
+                tabIndex={0}
+                onClick={() => handleDayOpen(day.iso)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    handleDayOpen(day.iso);
+                  }
+                }}
                 onDragOver={(e) => {
                   e.preventDefault();
                   setDragOverDay(day.iso);
@@ -261,8 +275,8 @@ const Tasks = () => {
                   padding: '10px',
                   border: `1px solid ${dragOverDay === day.iso ? theme.accent : theme.borderLight}`,
                   background: dragOverDay === day.iso ? theme.accentMuted : theme.bgCard,
-                  textDecoration: 'none',
                   display: 'block',
+                  cursor: 'pointer',
                 }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
@@ -279,7 +293,7 @@ const Tasks = () => {
                     <div style={{ fontSize: '10px', color: theme.textDim }}>+{tasksByDay[day.iso].length - 3} more</div>
                   )}
                 </div>
-              </Link>
+              </div>
             ))}
           </div>
         </section>

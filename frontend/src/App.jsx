@@ -4,6 +4,7 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import Tasks from './pages/Tasks';
+import DayTasks from './pages/DayTasks';
 
 const ProtectedRoute = ({ children }) => {
   const { user, loading } = useAuth();
