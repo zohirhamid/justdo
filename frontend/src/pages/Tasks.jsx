@@ -4,6 +4,23 @@ import { useTasks } from '../hooks/useTasks';
 
 const pad2 = (value) => String(value).padStart(2, '0');
 const COLOR_MODE_KEY = 'justdo.colorMode';
+const HASHTAG_RE = /(^|\s)#([a-zA-Z0-9_-]{1,50})(?=\b)/g;
+
+const parseTaskInput = (rawText = '') => {
+  const text = String(rawText ?? '');
+  const matches = [...text.matchAll(HASHTAG_RE)];
+  const tag = matches.length > 0 ? matches[0][2].toLowerCase() : null;
+  const cleanedText = text.replace(HASHTAG_RE, '$1').replace(/\s{2,}/g, ' ').trim();
+  return { text: cleanedText, tag };
+};
+
+const composeTaskEditorValue = (task) => {
+  const baseText = (task?.text ?? '').trim();
+  const tag = (task?.tag ?? '').trim();
+  if (!tag) return baseText;
+  if (!baseText) return `#${tag}`;
+  return `${baseText} #${tag}`;
+};
 
 const toIsoDate = (date) =>
   `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
@@ -303,7 +320,15 @@ const Tasks = () => {
   const handleAddInLane = async (laneKey, text) => {
     const trimmed = text.trim();
     if (!trimmed) return;
-    await addTask(trimmed, { scheduled_for: scheduledForForLaneKey(laneKey) });
+    const parsed = parseTaskInput(trimmed);
+    if (!parsed.text) return;
+    await addTask(parsed.text, { scheduled_for: scheduledForForLaneKey(laneKey), tag: parsed.tag });
+  };
+
+  const handleUpdateTextForTask = async (task, nextRawText) => {
+    const parsed = parseTaskInput(nextRawText);
+    if (!parsed.text) return task;
+    return updateTask(task.id, { text: parsed.text, tag: parsed.tag });
   };
 
   const moveTask = async ({ taskId, laneKey, beforeTaskId }) => {
@@ -366,7 +391,8 @@ const Tasks = () => {
         input:focus { outline: none; }
         ::placeholder { color: ${theme.faint}; }
         button { font-family: inherit; }
-        .boardWrap { overflow-x: auto; }
+        .boardWrap { overflow-x: auto; scrollbar-width: none; -ms-overflow-style: none; }
+        .boardWrap::-webkit-scrollbar { height: 0; }
         .weekBoard { display: grid; column-gap: 18px; row-gap: 0; padding: 0; }
         .generalBoard { margin-top: 28px; }
         .lane { height: 46vh; display: flex; flex-direction: column; }
@@ -376,12 +402,14 @@ const Tasks = () => {
         .laneMain { font-size: 18px; font-weight: 600; margin-top: 8px; line-height: 1.05; }
         .laneMainToday { color: ${theme.accent}; }
         .laneDivider { height: 1px; width: 100%; background: ${isDark ? 'rgba(255,255,255,0.06)' : 'rgba(17, 17, 17, 0.07)'}; margin: 0 0 10px; }
-        .laneBody { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding: 0; }
+        .laneBody { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding: 0; scrollbar-width: none; -ms-overflow-style: none; }
+        .laneBody::-webkit-scrollbar { width: 0; height: 0; }
         .laneAdd { padding: 6px 0 10px; }
         .laneAdd input { width: 100%; border: none; background: transparent; color: ${theme.text}; padding: 8px 0; font-size: 13px; }
         .taskRow { display: flex; align-items: center; gap: 10px; padding: 8px 0; background: transparent; opacity: 1; cursor: grab; }
         .taskRow:hover { background: ${theme.rowHover}; }
         .taskText { flex: 1; font-size: 13px; line-height: 1.25; }
+        .taskTag { display: inline-flex; align-items: center; margin-left: 8px; padding: 2px 7px; font-size: 11px; border-radius: 999px; background: ${theme.accentMuted}; color: ${theme.accent}; border: 1px solid ${theme.border}; }
         .taskDone { color: ${theme.doneText}; text-decoration: line-through; }
         .taskControls { display: flex; align-items: center; gap: 8px; opacity: 0; transition: opacity 120ms ease; }
         .taskRow:hover .taskControls { opacity: 1; }
@@ -536,7 +564,7 @@ const Tasks = () => {
                 onDropLane={handleDropOnLane}
                 onAddTask={handleAddInLane}
                 onToggleDone={(task) => updateTask(task.id, { done: !task.done })}
-                onUpdateText={(task, text) => updateTask(task.id, { text })}
+                onUpdateText={handleUpdateTextForTask}
                 onDelete={(task) => deleteTask(task.id)}
                 isToday={day.isToday}
               />
@@ -560,7 +588,7 @@ const Tasks = () => {
             onDropLane={handleDropOnLane}
             onAddTask={handleAddInLane}
             onToggleDone={(task) => updateTask(task.id, { done: !task.done })}
-            onUpdateText={(task, text) => updateTask(task.id, { text })}
+            onUpdateText={handleUpdateTextForTask}
             onDelete={(task) => deleteTask(task.id)}
           />
         </div>
@@ -602,7 +630,7 @@ const Tasks = () => {
                                 onDragOverTask={handleDragOverTask}
                                 onDropTask={handleDropOnLane}
                                 onToggleDone={() => updateTask(task.id, { done: !task.done })}
-                                onUpdateText={(text) => updateTask(task.id, { text })}
+                                onUpdateText={(text) => handleUpdateTextForTask(task, text)}
                                 onDelete={() => deleteTask(task.id)}
                                 draggable
                               />
@@ -654,7 +682,7 @@ const Tasks = () => {
                                 onDragOverTask={handleDragOverTask}
                                 onDropTask={handleDropOnLane}
                                 onToggleDone={() => updateTask(task.id, { done: !task.done })}
-                                onUpdateText={(text) => updateTask(task.id, { text })}
+                                onUpdateText={(text) => handleUpdateTextForTask(task, text)}
                                 onDelete={() => deleteTask(task.id)}
                                 draggable
                               />
@@ -796,12 +824,12 @@ const TaskRow = ({
 }) => {
   const isDragging = draggedId === task.id;
   const [isEditing, setIsEditing] = useState(false);
-  const [draftText, setDraftText] = useState(task.text ?? '');
+  const [draftText, setDraftText] = useState(() => composeTaskEditorValue(task));
   const inputRef = useRef(null);
 
   useEffect(() => {
-    if (!isEditing) setDraftText(task.text ?? '');
-  }, [isEditing, task.text]);
+    if (!isEditing) setDraftText(composeTaskEditorValue(task));
+  }, [isEditing, task.text, task.tag]);
 
   useEffect(() => {
     if (!isEditing) return;
@@ -815,9 +843,17 @@ const TaskRow = ({
 
   const commitEdit = async () => {
     const trimmed = draftText.trim();
-    if (!trimmed || trimmed === (task.text ?? '')) {
+    const baseline = composeTaskEditorValue(task);
+    if (!trimmed || trimmed === baseline) {
       setIsEditing(false);
-      setDraftText(task.text ?? '');
+      setDraftText(baseline);
+      return;
+    }
+
+    const parsed = parseTaskInput(trimmed);
+    if (!parsed.text) {
+      setIsEditing(false);
+      setDraftText(baseline);
       return;
     }
 
@@ -831,7 +867,7 @@ const TaskRow = ({
 
   const cancelEdit = () => {
     setIsEditing(false);
-    setDraftText(task.text ?? '');
+    setDraftText(composeTaskEditorValue(task));
   };
 
   return (
@@ -900,7 +936,8 @@ const TaskRow = ({
             aria-label="Edit task"
             title="Click to edit"
           >
-            {task.text}
+            <span>{task.text}</span>
+            {!!task.tag && <span className="taskTag">#{task.tag}</span>}
           </div>
         )}
       </div>
