@@ -1,8 +1,9 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useTasks } from '../hooks/useTasks';
 
 const pad2 = (value) => String(value).padStart(2, '0');
+const COLOR_MODE_KEY = 'justdo.colorMode';
 
 const toIsoDate = (date) =>
   `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
@@ -144,27 +145,67 @@ const Tasks = () => {
   const { tasks, loading, addTask, updateTask, deleteTask, reorderTasks } = useTasks();
 
   const [weekAnchor, setWeekAnchor] = useState(() => new Date());
+  const [isDark, setIsDark] = useState(() => {
+    const saved = localStorage.getItem(COLOR_MODE_KEY);
+    if (saved === 'dark') return true;
+    if (saved === 'light') return false;
+    return window.matchMedia?.('(prefers-color-scheme: dark)')?.matches ?? false;
+  });
   const [draggedId, setDraggedId] = useState(null);
   const [dropTarget, setDropTarget] = useState(null);
+  const dropTargetNextRef = useRef(null);
+  const dropTargetRafRef = useRef(null);
+  const [rangeMode, setRangeMode] = useState('week'); // 'week' | '3day'
 
-  const theme = {
-    bg: '#ffffff',
-    panel: '#ffffff',
-    card: '#ffffff',
-    text: '#111111',
-    dim: '#6b7280',
-    faint: '#9ca3af',
-    border: '#f0f0f0',
-    accent: '#7c3aed',
-    accentMuted: 'rgba(124, 58, 237, 0.10)',
-    doneText: '#9ca3af',
-  };
+  useEffect(() => {
+    localStorage.setItem(COLOR_MODE_KEY, isDark ? 'dark' : 'light');
+  }, [isDark]);
+
+  const theme = isDark
+    ? {
+        bg: '#0a0a0a',
+        panel: '#111111',
+        card: '#111111',
+        text: '#e5e5e5',
+        dim: '#8a8a8a',
+        faint: '#5a5a5a',
+        border: '#1f1f1f',
+        accent: '#7c3aed',
+        accentMuted: 'rgba(124, 58, 237, 0.18)',
+        doneText: '#666666',
+        rowHover: 'rgba(255,255,255,0.04)',
+      }
+    : {
+        bg: '#ffffff',
+        panel: '#ffffff',
+        card: '#ffffff',
+        text: '#111111',
+        dim: '#6b7280',
+        faint: '#9ca3af',
+        border: '#f0f0f0',
+        accent: '#7c3aed',
+        accentMuted: 'rgba(124, 58, 237, 0.10)',
+        doneText: '#9ca3af',
+        rowHover: 'rgba(0,0,0,0.03)',
+      };
 
   const weekDays = useMemo(() => getWeekDays(weekAnchor), [weekAnchor]);
   const weekIsos = useMemo(() => weekDays.map((d) => d.iso), [weekDays]);
   const weekStartIso = weekIsos[0];
   const weekEndIso = weekIsos[weekIsos.length - 1];
   const weekRangeLabel = useMemo(() => formatWeekRange(weekDays), [weekDays]);
+  const displayedDays = useMemo(() => {
+    if (rangeMode !== '3day') return weekDays;
+
+    const todayIso = toIsoDate(new Date());
+    const weekContainsToday = todayIso >= weekStartIso && todayIso <= weekEndIso;
+    const focusIso = weekContainsToday ? todayIso : toIsoDate(weekAnchor);
+    const focusIndex = weekDays.findIndex((d) => d.iso === focusIso);
+    const safeFocusIndex = focusIndex === -1 ? 0 : focusIndex;
+    const endIndex = Math.min(safeFocusIndex + 2, weekDays.length - 1);
+    const startIndex = Math.max(0, endIndex - 2);
+    return weekDays.slice(startIndex, endIndex + 1);
+  }, [rangeMode, weekAnchor, weekDays, weekStartIso, weekEndIso]);
 
   const generalTasks = useMemo(() => tasks.filter((t) => !t.scheduled_for), [tasks]);
 
@@ -203,8 +244,34 @@ const Tasks = () => {
 
   const pendingCount = useMemo(() => tasks.filter((t) => !t.done).length, [tasks]);
 
+  useEffect(() => {
+    return () => {
+      if (dropTargetRafRef.current != null) cancelAnimationFrame(dropTargetRafRef.current);
+    };
+  }, []);
+
+  const scheduleDropTarget = (next) => {
+    dropTargetNextRef.current = next;
+    if (dropTargetRafRef.current != null) return;
+    dropTargetRafRef.current = requestAnimationFrame(() => {
+      dropTargetRafRef.current = null;
+      setDropTarget(dropTargetNextRef.current);
+    });
+  };
+
+  const scheduleDropTargetIfChanged = (next) => {
+    const current = dropTargetNextRef.current ?? dropTarget;
+    const currentLaneKey = current?.laneKey ?? null;
+    const currentBeforeTaskId = current?.beforeTaskId ?? null;
+    const nextLaneKey = next?.laneKey ?? null;
+    const nextBeforeTaskId = next?.beforeTaskId ?? null;
+    if (currentLaneKey === nextLaneKey && currentBeforeTaskId === nextBeforeTaskId) return;
+    scheduleDropTarget(next);
+  };
+
   const handleDragStart = (e, id) => {
     setDraggedId(id);
+    dropTargetNextRef.current = null;
     setDropTarget(null);
     e.dataTransfer.effectAllowed = 'move';
     try {
@@ -216,20 +283,21 @@ const Tasks = () => {
 
   const handleDragEnd = () => {
     setDraggedId(null);
+    dropTargetNextRef.current = null;
+    if (dropTargetRafRef.current != null) cancelAnimationFrame(dropTargetRafRef.current);
+    dropTargetRafRef.current = null;
     setDropTarget(null);
   };
 
   const handleDragOverLane = (e, laneKey) => {
     e.preventDefault();
-    setDropTarget((prev) =>
-      prev?.laneKey === laneKey && prev.beforeTaskId == null ? prev : { laneKey, beforeTaskId: null }
-    );
+    scheduleDropTargetIfChanged({ laneKey, beforeTaskId: null });
   };
 
   const handleDragOverTask = (e, laneKey, beforeTaskId) => {
     e.preventDefault();
     if (draggedId === beforeTaskId) return;
-    setDropTarget({ laneKey, beforeTaskId });
+    scheduleDropTargetIfChanged({ laneKey, beforeTaskId });
   };
 
   const handleAddInLane = async (laneKey, text) => {
@@ -299,7 +367,7 @@ const Tasks = () => {
         ::placeholder { color: ${theme.faint}; }
         button { font-family: inherit; }
         .boardWrap { overflow-x: auto; }
-        .weekBoard { display: grid; grid-template-columns: repeat(7, minmax(240px, 1fr)); column-gap: 18px; row-gap: 0; padding: 0; }
+        .weekBoard { display: grid; column-gap: 18px; row-gap: 0; padding: 0; }
         .generalBoard { margin-top: 28px; }
         .lane { height: 46vh; display: flex; flex-direction: column; }
         .generalBoard .lane { height: 34vh; max-width: 980px; margin: 0 auto; }
@@ -307,12 +375,12 @@ const Tasks = () => {
         .laneTop { font-size: 10px; letter-spacing: 0.08em; color: ${theme.dim}; }
         .laneMain { font-size: 18px; font-weight: 600; margin-top: 8px; line-height: 1.05; }
         .laneMainToday { color: ${theme.accent}; }
-        .laneDivider { height: 1px; width: 100%; background: rgba(17, 17, 17, 0.07); margin: 0 0 10px; }
+        .laneDivider { height: 1px; width: 100%; background: ${isDark ? 'rgba(255,255,255,0.06)' : 'rgba(17, 17, 17, 0.07)'}; margin: 0 0 10px; }
         .laneBody { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding: 0; }
         .laneAdd { padding: 6px 0 10px; }
         .laneAdd input { width: 100%; border: none; background: transparent; color: ${theme.text}; padding: 8px 0; font-size: 13px; }
         .taskRow { display: flex; align-items: center; gap: 10px; padding: 8px 0; background: transparent; opacity: 1; cursor: grab; }
-        .taskRow:hover { background: rgba(0,0,0,0.03); }
+        .taskRow:hover { background: ${theme.rowHover}; }
         .taskText { flex: 1; font-size: 13px; line-height: 1.25; }
         .taskDone { color: ${theme.doneText}; text-decoration: line-through; }
         .taskControls { display: flex; align-items: center; gap: 8px; opacity: 0; transition: opacity 120ms ease; }
@@ -331,6 +399,61 @@ const Tasks = () => {
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <button
+              onClick={() => setIsDark((prev) => !prev)}
+              style={{
+                background: 'transparent',
+                border: `1px solid ${theme.border}`,
+                color: theme.dim,
+                padding: '8px 10px',
+                cursor: 'pointer',
+                fontSize: '12px',
+              }}
+              aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+              title={isDark ? 'Light mode' : 'Dark mode'}
+            >
+              {isDark ? '☀' : '☾'}
+            </button>
+            <div
+              style={{
+                display: 'flex',
+                background: theme.panel,
+                border: `1px solid ${theme.border}`,
+                borderRadius: '999px',
+                overflow: 'hidden',
+              }}
+            >
+              <button
+                onClick={() => setRangeMode('week')}
+                style={{
+                  background: rangeMode === 'week' ? theme.accentMuted : 'transparent',
+                  border: 'none',
+                  color: theme.dim,
+                  padding: '8px 10px',
+                  cursor: 'pointer',
+                  fontSize: '12px',
+                }}
+                aria-label="Show full week"
+                title="Week"
+              >
+                Week
+              </button>
+              <button
+                onClick={() => setRangeMode('3day')}
+                style={{
+                  background: rangeMode === '3day' ? theme.accentMuted : 'transparent',
+                  border: 'none',
+                  color: theme.dim,
+                  padding: '8px 10px',
+                  cursor: 'pointer',
+                  fontSize: '12px',
+                }}
+                aria-label="Show 3-day range"
+                title="3 days"
+              >
+                3 days
+              </button>
+            </div>
             <button
               onClick={() => setWeekAnchor((prev) => shiftDateByDays(prev, -7))}
               style={{
@@ -392,8 +515,11 @@ const Tasks = () => {
         </header>
 
         <div className="boardWrap">
-          <div className="weekBoard">
-            {weekDays.map((day) => (
+          <div
+            className="weekBoard"
+            style={{ gridTemplateColumns: `repeat(${displayedDays.length}, minmax(240px, 1fr))` }}
+          >
+            {displayedDays.map((day) => (
               <Lane
                 key={day.iso}
                 topLabel={formatDayHeaderTop(day.date)}
@@ -410,6 +536,7 @@ const Tasks = () => {
                 onDropLane={handleDropOnLane}
                 onAddTask={handleAddInLane}
                 onToggleDone={(task) => updateTask(task.id, { done: !task.done })}
+                onUpdateText={(task, text) => updateTask(task.id, { text })}
                 onDelete={(task) => deleteTask(task.id)}
                 isToday={day.isToday}
               />
@@ -433,6 +560,7 @@ const Tasks = () => {
             onDropLane={handleDropOnLane}
             onAddTask={handleAddInLane}
             onToggleDone={(task) => updateTask(task.id, { done: !task.done })}
+            onUpdateText={(task, text) => updateTask(task.id, { text })}
             onDelete={(task) => deleteTask(task.id)}
           />
         </div>
@@ -446,28 +574,44 @@ const Tasks = () => {
                 </summary>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '10px' }}>
                   {historyByDate.dates.map((iso) => (
-                    <div key={iso} style={{ border: `1px solid ${theme.border}`, background: theme.card, padding: '10px' }}>
+                    <div
+                      key={iso}
+                      onDragOver={(e) => handleDragOverLane(e, iso)}
+                      onDrop={(e) => handleDropOnLane(e, iso, null)}
+                      style={{ border: `1px solid ${theme.border}`, background: theme.card, padding: '10px' }}
+                    >
                       <div style={{ color: theme.dim, fontSize: '11px', marginBottom: '8px' }}>
                         {formatIsoLabel(iso)} · {historyByDate.grouped.get(iso).length}
                       </div>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        {historyByDate.grouped.get(iso).map((task) => (
-                          <TaskRow
-                            key={task.id}
-                            task={task}
-                            laneKey={laneKeyForScheduledFor(task.scheduled_for)}
-                            theme={theme}
-                            draggedId={draggedId}
-                            dropTarget={null}
-                            onDragStart={handleDragStart}
-                            onDragEnd={handleDragEnd}
-                            onDragOverTask={() => {}}
-                            onDropTask={() => {}}
-                            onToggleDone={() => updateTask(task.id, { done: !task.done })}
-                            onDelete={() => deleteTask(task.id)}
-                            draggable
-                          />
-                        ))}
+                        {historyByDate.grouped.get(iso).map((task) => {
+                          const showDropSlot =
+                            draggedId != null && dropTarget?.laneKey === iso && dropTarget?.beforeTaskId === task.id;
+
+                          return (
+                            <React.Fragment key={task.id}>
+                              {showDropSlot && <DropLine color={theme.accent} />}
+                              <TaskRow
+                                task={task}
+                                laneKey={iso}
+                                theme={theme}
+                                draggedId={draggedId}
+                                dropTarget={dropTarget}
+                                onDragStart={handleDragStart}
+                                onDragEnd={handleDragEnd}
+                                onDragOverTask={handleDragOverTask}
+                                onDropTask={handleDropOnLane}
+                                onToggleDone={() => updateTask(task.id, { done: !task.done })}
+                                onUpdateText={(text) => updateTask(task.id, { text })}
+                                onDelete={() => deleteTask(task.id)}
+                                draggable
+                              />
+                            </React.Fragment>
+                          );
+                        })}
+                        {draggedId != null && dropTarget?.laneKey === iso && dropTarget?.beforeTaskId == null && (
+                          <DropSlot color={theme.accentMuted} />
+                        )}
                       </div>
                     </div>
                   ))}
@@ -482,28 +626,44 @@ const Tasks = () => {
                 </summary>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '10px' }}>
                   {laterByDate.dates.map((iso) => (
-                    <div key={iso} style={{ border: `1px solid ${theme.border}`, background: theme.card, padding: '10px' }}>
+                    <div
+                      key={iso}
+                      onDragOver={(e) => handleDragOverLane(e, iso)}
+                      onDrop={(e) => handleDropOnLane(e, iso, null)}
+                      style={{ border: `1px solid ${theme.border}`, background: theme.card, padding: '10px' }}
+                    >
                       <div style={{ color: theme.dim, fontSize: '11px', marginBottom: '8px' }}>
                         {formatIsoLabel(iso)} · {laterByDate.grouped.get(iso).length}
                       </div>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        {laterByDate.grouped.get(iso).map((task) => (
-                          <TaskRow
-                            key={task.id}
-                            task={task}
-                            laneKey={laneKeyForScheduledFor(task.scheduled_for)}
-                            theme={theme}
-                            draggedId={draggedId}
-                            dropTarget={null}
-                            onDragStart={handleDragStart}
-                            onDragEnd={handleDragEnd}
-                            onDragOverTask={() => {}}
-                            onDropTask={() => {}}
-                            onToggleDone={() => updateTask(task.id, { done: !task.done })}
-                            onDelete={() => deleteTask(task.id)}
-                            draggable
-                          />
-                        ))}
+                        {laterByDate.grouped.get(iso).map((task) => {
+                          const showDropSlot =
+                            draggedId != null && dropTarget?.laneKey === iso && dropTarget?.beforeTaskId === task.id;
+
+                          return (
+                            <React.Fragment key={task.id}>
+                              {showDropSlot && <DropLine color={theme.accent} />}
+                              <TaskRow
+                                task={task}
+                                laneKey={iso}
+                                theme={theme}
+                                draggedId={draggedId}
+                                dropTarget={dropTarget}
+                                onDragStart={handleDragStart}
+                                onDragEnd={handleDragEnd}
+                                onDragOverTask={handleDragOverTask}
+                                onDropTask={handleDropOnLane}
+                                onToggleDone={() => updateTask(task.id, { done: !task.done })}
+                                onUpdateText={(text) => updateTask(task.id, { text })}
+                                onDelete={() => deleteTask(task.id)}
+                                draggable
+                              />
+                            </React.Fragment>
+                          );
+                        })}
+                        {draggedId != null && dropTarget?.laneKey === iso && dropTarget?.beforeTaskId == null && (
+                          <DropSlot color={theme.accentMuted} />
+                        )}
                       </div>
                     </div>
                   ))}
@@ -532,10 +692,13 @@ const Lane = ({
   onDropLane,
   onAddTask,
   onToggleDone,
+  onUpdateText,
   onDelete,
   isToday,
 }) => {
   const [draft, setDraft] = useState('');
+  const isLaneDropActive = dropTarget?.laneKey === laneKey && draggedId != null;
+  const isLaneDropAtEnd = isLaneDropActive && dropTarget?.beforeTaskId == null;
 
   return (
     <div
@@ -561,23 +724,35 @@ const Lane = ({
           onDropLane(e, laneKey, null);
         }}
       >
-        {tasks.map((task) => (
-          <TaskRow
-            key={task.id}
-            task={task}
-            laneKey={laneKey}
-            theme={theme}
-            draggedId={draggedId}
-            dropTarget={dropTarget}
-            onDragStart={onDragStart}
-            onDragEnd={onDragEnd}
-            onDragOverTask={onDragOverTask}
-            onDropTask={onDropLane}
-            onToggleDone={() => onToggleDone(task)}
-            onDelete={() => onDelete(task)}
-            draggable
-          />
-        ))}
+        {tasks.map((task) => {
+          const showDropSlot =
+            draggedId != null && dropTarget?.laneKey === laneKey && dropTarget?.beforeTaskId === task.id;
+
+          return (
+            <React.Fragment key={task.id}>
+              {showDropSlot && <DropLine color={theme.accent} />}
+              <TaskRow
+                task={task}
+                laneKey={laneKey}
+                theme={theme}
+                draggedId={draggedId}
+                dropTarget={dropTarget}
+                onDragStart={onDragStart}
+                onDragEnd={onDragEnd}
+                onDragOverTask={onDragOverTask}
+                onDropTask={onDropLane}
+                onToggleDone={() => onToggleDone(task)}
+                onUpdateText={(text) => onUpdateText?.(task, text)}
+                onDelete={() => onDelete(task)}
+                draggable
+              />
+            </React.Fragment>
+          );
+        })}
+
+        {isLaneDropAtEnd && (
+          <DropSlot color={theme.accentMuted} />
+        )}
 
         <div className="laneAdd">
           <input
@@ -615,14 +790,53 @@ const TaskRow = ({
   onDragOverTask,
   onDropTask,
   onToggleDone,
+  onUpdateText,
   onDelete,
   draggable,
 }) => {
   const isDragging = draggedId === task.id;
+  const [isEditing, setIsEditing] = useState(false);
+  const [draftText, setDraftText] = useState(task.text ?? '');
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    if (!isEditing) setDraftText(task.text ?? '');
+  }, [isEditing, task.text]);
+
+  useEffect(() => {
+    if (!isEditing) return;
+    const input = inputRef.current;
+    if (!input) return;
+    input.focus();
+    input.select();
+  }, [isEditing]);
+
+  const beginEdit = () => setIsEditing(true);
+
+  const commitEdit = async () => {
+    const trimmed = draftText.trim();
+    if (!trimmed || trimmed === (task.text ?? '')) {
+      setIsEditing(false);
+      setDraftText(task.text ?? '');
+      return;
+    }
+
+    try {
+      await onUpdateText(trimmed);
+      setIsEditing(false);
+    } catch (error) {
+      console.error('Failed to update task text', error);
+    }
+  };
+
+  const cancelEdit = () => {
+    setIsEditing(false);
+    setDraftText(task.text ?? '');
+  };
 
   return (
     <div
-      draggable={draggable}
+      draggable={draggable && !isEditing}
       onDragStart={(e) => onDragStart(e, task.id)}
       onDragEnd={onDragEnd}
       onDragOver={(e) => {
@@ -634,7 +848,9 @@ const TaskRow = ({
         onDropTask(e, laneKey, task.id);
       }}
       className="taskRow"
-      style={{ opacity: isDragging ? 0.55 : 1 }}
+      style={{
+        opacity: isDragging ? 0.55 : 1,
+      }}
     >
       <input
         type="checkbox"
@@ -646,7 +862,48 @@ const TaskRow = ({
         aria-label={task.done ? 'Mark as not done' : 'Mark as done'}
       />
 
-      <div className={`taskText ${task.done ? 'taskDone' : ''}`}>{task.text}</div>
+      <div className="taskText">
+        {isEditing ? (
+          <input
+            ref={inputRef}
+            value={draftText}
+            onChange={(e) => setDraftText(e.target.value)}
+            onBlur={commitEdit}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') commitEdit();
+              if (e.key === 'Escape') cancelEdit();
+            }}
+            draggable={false}
+            onDragStart={(e) => e.preventDefault()}
+            style={{
+              width: '100%',
+              border: `1px solid ${theme.border}`,
+              background: theme.panel,
+              color: theme.text,
+              padding: '6px 8px',
+              borderRadius: '8px',
+              fontSize: '13px',
+              lineHeight: 1.25,
+            }}
+            aria-label="Edit task"
+          />
+        ) : (
+          <div
+            onClick={beginEdit}
+            className={task.done ? 'taskDone' : ''}
+            style={{ cursor: 'text', whiteSpace: 'pre-wrap' }}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') beginEdit();
+            }}
+            aria-label="Edit task"
+            title="Click to edit"
+          >
+            {task.text}
+          </div>
+        )}
+      </div>
 
       <div className="taskControls">
         <button
@@ -663,5 +920,28 @@ const TaskRow = ({
     </div>
   );
 };
+
+const DropSlot = ({ color }) => (
+  <div
+    aria-hidden="true"
+    style={{
+      height: '28px',
+      borderRadius: '10px',
+      background: color,
+    }}
+  />
+);
+
+const DropLine = ({ color }) => (
+  <div
+    aria-hidden="true"
+    style={{
+      height: '2px',
+      background: color,
+      borderRadius: '999px',
+      margin: '2px 10px',
+    }}
+  />
+);
 
 export default Tasks;

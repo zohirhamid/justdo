@@ -1,7 +1,9 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useTasks } from '../hooks/useTasks';
+
+const COLOR_MODE_KEY = 'justdo.colorMode';
 
 const formatDateLabel = (isoDate) => {
   const parsed = new Date(`${isoDate}T00:00:00`);
@@ -19,9 +21,29 @@ const DayTasks = () => {
   const { date } = useParams();
   const { user, logout } = useAuth();
   const { tasks, loading, updateTask, deleteTask, reorderTasks } = useTasks();
-  const [isDark, setIsDark] = useState(true);
+  const [isDark, setIsDark] = useState(() => {
+    const saved = localStorage.getItem(COLOR_MODE_KEY);
+    if (saved === 'dark') return true;
+    if (saved === 'light') return false;
+    return window.matchMedia?.('(prefers-color-scheme: dark)')?.matches ?? true;
+  });
   const [draggedId, setDraggedId] = useState(null);
   const [dragOverId, setDragOverId] = useState(null);
+  const [editingId, setEditingId] = useState(null);
+  const [draftText, setDraftText] = useState('');
+  const editInputRef = useRef(null);
+
+  useEffect(() => {
+    localStorage.setItem(COLOR_MODE_KEY, isDark ? 'dark' : 'light');
+  }, [isDark]);
+
+  useEffect(() => {
+    if (editingId == null) return;
+    const input = editInputRef.current;
+    if (!input) return;
+    input.focus();
+    input.select();
+  }, [editingId]);
 
   const theme = isDark
     ? {
@@ -63,7 +85,8 @@ const DayTasks = () => {
 
   const handleDragOver = (e, id) => {
     e.preventDefault();
-    if (id !== draggedId) setDragOverId(id);
+    if (id === draggedId) return;
+    setDragOverId((prev) => (prev === id ? prev : id));
   };
 
   const handleDrop = async (e, targetId) => {
@@ -85,6 +108,31 @@ const DayTasks = () => {
   const handleDragEnd = () => {
     setDraggedId(null);
     setDragOverId(null);
+  };
+
+  const beginEdit = (task) => {
+    setEditingId(task.id);
+    setDraftText(task.text ?? '');
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setDraftText('');
+  };
+
+  const commitEdit = async (task) => {
+    const trimmed = draftText.trim();
+    if (!trimmed || trimmed === (task.text ?? '')) {
+      cancelEdit();
+      return;
+    }
+
+    try {
+      await updateTask(task.id, { text: trimmed });
+      cancelEdit();
+    } catch (error) {
+      console.error('Failed to update task text', error);
+    }
   };
 
   if (loading) {
@@ -194,26 +242,38 @@ const DayTasks = () => {
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
           {dayTasks.map((task) => (
-            <div
-              key={task.id}
-              className="day-task-row"
-              draggable
-              onDragStart={(e) => handleDragStart(e, task.id)}
-              onDragOver={(e) => handleDragOver(e, task.id)}
-              onDragLeave={() => setDragOverId(null)}
-              onDrop={(e) => handleDrop(e, task.id)}
-              onDragEnd={handleDragEnd}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '12px',
-                padding: '14px 16px',
-                backgroundColor: dragOverId === task.id ? 'rgba(234, 179, 8, 0.15)' : task.done ? theme.done : theme.bgCard,
-                border: `1px solid ${dragOverId === task.id ? theme.accent : theme.borderLight}`,
-                opacity: draggedId === task.id ? 0.5 : 1,
-                transition: 'background-color 0.15s ease, border-color 0.15s ease',
-              }}
-            >
+            <div key={task.id}>
+              {dragOverId === task.id && draggedId != null && draggedId !== task.id && (
+                <div
+                  aria-hidden="true"
+                  style={{
+                    height: '2px',
+                    background: '#7c3aed',
+                    borderRadius: '999px',
+                    margin: '2px 10px',
+                  }}
+                />
+              )}
+
+              <div
+                className="day-task-row"
+                draggable={editingId !== task.id}
+                onDragStart={(e) => handleDragStart(e, task.id)}
+                onDragOver={(e) => handleDragOver(e, task.id)}
+                onDragLeave={() => setDragOverId(null)}
+                onDrop={(e) => handleDrop(e, task.id)}
+                onDragEnd={handleDragEnd}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '12px',
+                  padding: '14px 16px',
+                  backgroundColor: task.done ? theme.done : theme.bgCard,
+                  border: `1px solid ${theme.borderLight}`,
+                  opacity: draggedId === task.id ? 0.5 : 1,
+                  transition: 'background-color 0.15s ease, border-color 0.15s ease',
+                }}
+              >
               <div className="drag-handle" style={{ cursor: 'grab', color: theme.textDimmer, fontSize: '10px', opacity: 0.6, userSelect: 'none' }}>
                 ⋮⋮
               </div>
@@ -235,15 +295,52 @@ const DayTasks = () => {
                 {task.done && <span style={{ color: isDark ? '#000' : '#fff', fontSize: '11px' }}>✓</span>}
               </button>
 
-              <span
-                style={{
-                  flex: 1,
-                  fontSize: '13px',
-                  color: task.done ? theme.doneText : theme.text,
-                  textDecoration: task.done ? 'line-through' : 'none',
-                }}
-              >
-                {task.text}
+              <span style={{ flex: 1 }}>
+                {editingId === task.id ? (
+                  <input
+                    ref={editInputRef}
+                    value={draftText}
+                    onChange={(e) => setDraftText(e.target.value)}
+                    onBlur={() => commitEdit(task)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') commitEdit(task);
+                      if (e.key === 'Escape') cancelEdit();
+                    }}
+                    draggable={false}
+                    onDragStart={(e) => e.preventDefault()}
+                    style={{
+                      width: '100%',
+                      border: `1px solid ${theme.borderLight}`,
+                      background: theme.bg,
+                      color: theme.text,
+                      padding: '8px 10px',
+                      borderRadius: '10px',
+                      fontSize: '13px',
+                    }}
+                    aria-label="Edit task"
+                  />
+                ) : (
+                  <span
+                    onClick={() => beginEdit(task)}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') beginEdit(task);
+                    }}
+                    title="Click to edit"
+                    aria-label="Edit task"
+                    style={{
+                      display: 'block',
+                      fontSize: '13px',
+                      color: task.done ? theme.doneText : theme.text,
+                      textDecoration: task.done ? 'line-through' : 'none',
+                      cursor: 'text',
+                      whiteSpace: 'pre-wrap',
+                    }}
+                  >
+                    {task.text}
+                  </span>
+                )}
               </span>
 
               <span
@@ -273,6 +370,7 @@ const DayTasks = () => {
               >
                 ×
               </button>
+              </div>
             </div>
           ))}
         </div>
