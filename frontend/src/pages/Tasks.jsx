@@ -1,18 +1,22 @@
 import React, { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useTasks } from '../hooks/useTasks';
 
+const pad2 = (value) => String(value).padStart(2, '0');
 
-const toIsoDate = (date) => {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+const toIsoDate = (date) =>
+  `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+
+const parseIsoDate = (isoDate) => new Date(`${isoDate}T00:00:00`);
+
+const formatIsoLabel = (isoDate) => {
+  const parsed = parseIsoDate(isoDate);
+  if (Number.isNaN(parsed.getTime())) return isoDate;
+  return parsed.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
 };
 
-const getWeekDays = () => {
-  const today = new Date();
+const getWeekDays = (anchor = new Date()) => {
+  const today = new Date(anchor);
   const dayOfWeek = today.getDay(); // 0 sunday
   const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
   const monday = new Date(today);
@@ -21,132 +25,246 @@ const getWeekDays = () => {
   return Array.from({ length: 7 }, (_, index) => {
     const date = new Date(monday);
     date.setDate(monday.getDate() + index);
+    const iso = toIsoDate(date);
     return {
       date,
-      iso: toIsoDate(date),
+      iso,
       label: date.toLocaleDateString(undefined, { weekday: 'short' }),
       dayNumber: date.getDate(),
-      isToday: toIsoDate(today) === toIsoDate(date),
+      isToday: toIsoDate(today) === iso,
     };
   });
 };
 
+const shiftDateByDays = (date, deltaDays) => {
+  const copy = new Date(date);
+  copy.setDate(copy.getDate() + deltaDays);
+  return copy;
+};
+
+const formatDayHeaderTop = (date) =>
+  date.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' }).toUpperCase();
+
+const formatDayHeaderMain = (date) =>
+  date.toLocaleDateString(undefined, { weekday: 'long' }).toUpperCase();
+
+const formatWeekRange = (weekDays) => {
+  if (!weekDays?.length) return '';
+  const start = weekDays[0].date;
+  const end = weekDays[weekDays.length - 1].date;
+  const sameMonth = start.getMonth() === end.getMonth() && start.getFullYear() === end.getFullYear();
+
+  const startLabel = start.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+  });
+  const endLabel = end.toLocaleDateString(undefined, {
+    month: sameMonth ? undefined : 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+
+  return `${startLabel} – ${endLabel}`;
+};
+
+const laneKeyForScheduledFor = (scheduledFor) => (scheduledFor ? scheduledFor : 'general');
+const scheduledForForLaneKey = (laneKey) => (laneKey === 'general' ? null : laneKey);
+
+const buildLaneMap = (taskList) => {
+  const lanes = new Map();
+  for (const task of taskList) {
+    const laneKey = laneKeyForScheduledFor(task.scheduled_for);
+    if (!lanes.has(laneKey)) lanes.set(laneKey, []);
+    lanes.get(laneKey).push(task);
+  }
+  return lanes;
+};
+
+const computeLaneKeyOrder = (lanes, weekIsos) => {
+  const order = ['general', ...weekIsos];
+  const weekSet = new Set(weekIsos);
+
+  const otherDateKeys = [];
+  for (const key of lanes.keys()) {
+    if (key === 'general') continue;
+    if (weekSet.has(key)) continue;
+    otherDateKeys.push(key);
+  }
+
+  const weekStart = weekIsos[0];
+  const weekEnd = weekIsos[weekIsos.length - 1];
+  const past = otherDateKeys.filter((k) => k < weekStart).sort((a, b) => (a < b ? 1 : -1));
+  const future = otherDateKeys.filter((k) => k > weekEnd).sort((a, b) => (a > b ? 1 : -1));
+  const unknown = otherDateKeys.filter((k) => k >= weekStart && k <= weekEnd);
+
+  return [...order, ...past, ...future, ...unknown];
+};
+
+const reorderByMove = ({ taskList, weekIsos, taskId, targetLaneKey, beforeTaskId }) => {
+  const lanes = buildLaneMap(taskList);
+  let movedTask = null;
+
+  for (const [, lane] of lanes) {
+    const index = lane.findIndex((t) => t.id === taskId);
+    if (index !== -1) {
+      movedTask = lane.splice(index, 1)[0];
+      break;
+    }
+  }
+
+  if (!movedTask) return taskList;
+
+  const targetLane = lanes.get(targetLaneKey) ? [...lanes.get(targetLaneKey)] : [];
+  const insertIndex = beforeTaskId ? targetLane.findIndex((t) => t.id === beforeTaskId) : -1;
+  const normalizedIndex = insertIndex === -1 ? targetLane.length : insertIndex;
+  targetLane.splice(normalizedIndex, 0, movedTask);
+  lanes.set(targetLaneKey, targetLane);
+
+  const laneOrder = computeLaneKeyOrder(lanes, weekIsos);
+  const used = new Set();
+  const flattened = [];
+
+  for (const key of laneOrder) {
+    const lane = lanes.get(key);
+    if (!lane) continue;
+    used.add(key);
+    flattened.push(...lane);
+  }
+
+  for (const [key, lane] of lanes) {
+    if (used.has(key)) continue;
+    flattened.push(...lane);
+  }
+
+  return flattened;
+};
+
 const Tasks = () => {
-  const navigate = useNavigate();
   const { user, logout } = useAuth();
   const { tasks, loading, addTask, updateTask, deleteTask, reorderTasks } = useTasks();
-  
-  const [newTask, setNewTask] = useState('');
-  const [newTag, setNewTag] = useState('');
-  const [editingTag, setEditingTag] = useState(null);
-  const [filterTag, setFilterTag] = useState(null);
-  const [draggedId, setDraggedId] = useState(null);
-  const [dragOverId, setDragOverId] = useState(null);
-  const [dragOverDay, setDragOverDay] = useState(null);
-  const [isDark, setIsDark] = useState(true);
 
-  const theme = isDark
-    ? {
-        bg: '#0a0a0a',
-        bgCard: '#111',
-        text: '#e5e5e5',
-        textMuted: '#888',
-        textDim: '#555',
-        textDimmer: '#333',
-        border: '#1a1a1a',
-        borderLight: '#222',
-        accent: '#eab308',
-        accentMuted: 'rgba(234, 179, 8, 0.15)',
-        done: '#0d0d0d',
-        doneText: '#444',
-        dragHandle: '#333',
-      }
-    : {
-        bg: '#fafafa',
-        bgCard: '#fff',
-        text: '#1a1a1a',
-        textMuted: '#666',
-        textDim: '#999',
-        textDimmer: '#ccc',
-        border: '#e5e5e5',
-        borderLight: '#eee',
-        accent: '#b8960a',
-        accentMuted: 'rgba(184, 150, 10, 0.12)',
-        done: '#fafafa',
-        doneText: '#bbb',
-        dragHandle: '#ccc',
-      };
-    
-  const weekDays = useMemo(() => getWeekDays(), []);
-  const allTags = [...new Set(tasks.map((t) => t.tag).filter(Boolean))];
-  const baseFilteredTasks = filterTag ? tasks.filter((t) => t.tag === filterTag) : tasks;
-  const filteredTasks = baseFilteredTasks.filter((t) => !t.scheduled_for);
-  const pendingCount = tasks.filter((t) => !t.done).length;
-  
+  const [weekAnchor, setWeekAnchor] = useState(() => new Date());
+  const [draggedId, setDraggedId] = useState(null);
+  const [dropTarget, setDropTarget] = useState(null);
+
+  const theme = {
+    bg: '#ffffff',
+    panel: '#ffffff',
+    card: '#ffffff',
+    text: '#111111',
+    dim: '#6b7280',
+    faint: '#9ca3af',
+    border: '#f0f0f0',
+    accent: '#7c3aed',
+    accentMuted: 'rgba(124, 58, 237, 0.10)',
+    doneText: '#9ca3af',
+  };
+
+  const weekDays = useMemo(() => getWeekDays(weekAnchor), [weekAnchor]);
+  const weekIsos = useMemo(() => weekDays.map((d) => d.iso), [weekDays]);
+  const weekStartIso = weekIsos[0];
+  const weekEndIso = weekIsos[weekIsos.length - 1];
+  const weekRangeLabel = useMemo(() => formatWeekRange(weekDays), [weekDays]);
+
+  const generalTasks = useMemo(() => tasks.filter((t) => !t.scheduled_for), [tasks]);
+
   const tasksByDay = useMemo(() => {
     const grouped = {};
-    weekDays.forEach((day) => {
-      grouped[day.iso] = baseFilteredTasks.filter((task) => task.scheduled_for === day.iso);
-    });
+    for (const dayIso of weekIsos) grouped[dayIso] = [];
+    for (const task of tasks) {
+      if (task.scheduled_for && grouped[task.scheduled_for]) grouped[task.scheduled_for].push(task);
+    }
     return grouped;
-  }, [baseFilteredTasks, weekDays]);
+  }, [tasks, weekIsos]);
 
-  const handleAddTask = async () => {
-    if (!newTask.trim()) return;
-    await addTask(newTask.trim(), newTag.trim().toLowerCase() || null);
-    setNewTask('');
-    setNewTag('');
-  };
+  const historyByDate = useMemo(() => {
+    const grouped = new Map();
+    for (const task of tasks) {
+      if (!task.scheduled_for) continue;
+      if (task.scheduled_for >= weekStartIso) continue;
+      if (!grouped.has(task.scheduled_for)) grouped.set(task.scheduled_for, []);
+      grouped.get(task.scheduled_for).push(task);
+    }
+    const dates = [...grouped.keys()].sort((a, b) => (a < b ? 1 : -1));
+    return { grouped, dates };
+  }, [tasks, weekStartIso]);
+
+  const laterByDate = useMemo(() => {
+    const grouped = new Map();
+    for (const task of tasks) {
+      if (!task.scheduled_for) continue;
+      if (task.scheduled_for <= weekEndIso) continue;
+      if (!grouped.has(task.scheduled_for)) grouped.set(task.scheduled_for, []);
+      grouped.get(task.scheduled_for).push(task);
+    }
+    const dates = [...grouped.keys()].sort((a, b) => (a > b ? 1 : -1));
+    return { grouped, dates };
+  }, [tasks, weekEndIso]);
+
+  const pendingCount = useMemo(() => tasks.filter((t) => !t.done).length, [tasks]);
 
   const handleDragStart = (e, id) => {
     setDraggedId(id);
+    setDropTarget(null);
     e.dataTransfer.effectAllowed = 'move';
-  };
-
-  const handleDragOver = (e, id) => {
-    e.preventDefault();
-    if (id !== draggedId) setDragOverId(id);
-  };
-
-  const handleDrop = async (e, targetId) => {
-    e.preventDefault();
-    if (draggedId === targetId) return;
-
-    const draggedIndex = tasks.findIndex((t) => t.id === draggedId);
-    const targetIndex = tasks.findIndex((t) => t.id === targetId);
-
-    const newTasks = [...tasks];
-    const [draggedTask] = newTasks.splice(draggedIndex, 1);
-    newTasks.splice(targetIndex, 0, draggedTask);
-
-    await reorderTasks(newTasks);
-    setDraggedId(null);
-    setDragOverId(null);
-  };
-
-  const handleDropOnDay = async (e, isoDate) => {
-    e.preventDefault();
-    if (!draggedId) return;
-    await updateTask(draggedId, { scheduled_for: isoDate });
-    setDraggedId(null);
-    setDragOverId(null);
-    setDragOverDay(null);
-  };
-
-  const handleDayOpen = (isoDate) => {
-    if (draggedId) return;
-    navigate(`/day/${isoDate}`);
+    try {
+      e.dataTransfer.setData('text/plain', String(id));
+    } catch {
+      // ignore
+    }
   };
 
   const handleDragEnd = () => {
     setDraggedId(null);
-    setDragOverId(null);
-    setDragOverDay(null);
+    setDropTarget(null);
   };
 
-  const handleUpdateTag = async (id, tag) => {
-    await updateTask(id, { tag: tag.toLowerCase() || null });
-    setEditingTag(null);
+  const handleDragOverLane = (e, laneKey) => {
+    e.preventDefault();
+    setDropTarget((prev) =>
+      prev?.laneKey === laneKey && prev.beforeTaskId == null ? prev : { laneKey, beforeTaskId: null }
+    );
+  };
+
+  const handleDragOverTask = (e, laneKey, beforeTaskId) => {
+    e.preventDefault();
+    if (draggedId === beforeTaskId) return;
+    setDropTarget({ laneKey, beforeTaskId });
+  };
+
+  const handleAddInLane = async (laneKey, text) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    await addTask(trimmed, { scheduled_for: scheduledForForLaneKey(laneKey) });
+  };
+
+  const moveTask = async ({ taskId, laneKey, beforeTaskId }) => {
+    if (!taskId) return;
+    const existing = tasks.find((t) => t.id === taskId);
+    if (!existing) return;
+
+    let updatedTask = existing;
+    if ((existing.scheduled_for ? existing.scheduled_for : null) !== scheduledForForLaneKey(laneKey)) {
+      updatedTask = await updateTask(taskId, { scheduled_for: scheduledForForLaneKey(laneKey) });
+    }
+
+    const nextTasks = tasks.map((t) => (t.id === taskId ? { ...t, ...updatedTask } : t));
+    const newOrder = reorderByMove({
+      taskList: nextTasks,
+      weekIsos,
+      taskId,
+      targetLaneKey: laneKeyForScheduledFor(scheduledForForLaneKey(laneKey)),
+      beforeTaskId,
+    });
+
+    await reorderTasks(newOrder);
+  };
+
+  const handleDropOnLane = async (e, laneKey, beforeTaskId) => {
+    e.preventDefault();
+    const taskId = draggedId ?? Number(e.dataTransfer.getData('text/plain'));
+    await moveTask({ taskId, laneKey, beforeTaskId });
+    handleDragEnd();
   };
 
   if (loading) {
@@ -158,7 +276,7 @@ const Tasks = () => {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          color: theme.textDim,
+          color: theme.faint,
         }}
       >
         Loading...
@@ -172,345 +290,375 @@ const Tasks = () => {
         minHeight: '100vh',
         backgroundColor: theme.bg,
         color: theme.text,
-        fontFamily: '"JetBrains Mono", "SF Mono", monospace',
-        padding: '40px 24px',
-        transition: 'background-color 0.2s ease',
+        padding: '22px 18px 44px',
       }}
     >
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500&display=swap');
         * { box-sizing: border-box; }
         input:focus { outline: none; }
-        ::placeholder { color: ${theme.textDim}; }
-        .task-row:hover .drag-handle { opacity: 1; }
+        ::placeholder { color: ${theme.faint}; }
+        button { font-family: inherit; }
+        .boardWrap { overflow-x: auto; }
+        .weekBoard { display: grid; grid-template-columns: repeat(7, minmax(240px, 1fr)); column-gap: 18px; row-gap: 0; padding: 0; }
+        .generalBoard { margin-top: 28px; }
+        .lane { height: 46vh; display: flex; flex-direction: column; }
+        .generalBoard .lane { height: 34vh; max-width: 980px; margin: 0 auto; }
+        .laneHeader { padding: 0 0 10px; }
+        .laneTop { font-size: 10px; letter-spacing: 0.08em; color: ${theme.dim}; }
+        .laneMain { font-size: 18px; font-weight: 600; margin-top: 8px; line-height: 1.05; }
+        .laneMainToday { color: ${theme.accent}; }
+        .laneDivider { height: 1px; width: 100%; background: rgba(17, 17, 17, 0.07); margin: 0 0 10px; }
+        .laneBody { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding: 0; }
+        .laneAdd { padding: 6px 0 10px; }
+        .laneAdd input { width: 100%; border: none; background: transparent; color: ${theme.text}; padding: 8px 0; font-size: 13px; }
+        .taskRow { display: flex; align-items: center; gap: 10px; padding: 8px 0; background: transparent; opacity: 1; cursor: grab; }
+        .taskRow:hover { background: rgba(0,0,0,0.03); }
+        .taskText { flex: 1; font-size: 13px; line-height: 1.25; }
+        .taskDone { color: ${theme.doneText}; text-decoration: line-through; }
+        .taskControls { display: flex; align-items: center; gap: 8px; opacity: 0; transition: opacity 120ms ease; }
+        .taskRow:hover .taskControls { opacity: 1; }
+        .iconBtn { background: transparent; border: none; color: ${theme.dim}; cursor: pointer; padding: 2px 4px; font-size: 14px; line-height: 1; }
+        .checkBox { width: 16px; height: 16px; margin: 0 2px 0 0; accent-color: ${theme.accent}; }
       `}</style>
 
-      <div style={{ maxWidth: '900px', margin: '0 auto' }}>
-        <header
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'flex-end',
-            marginBottom: '32px',
-            paddingBottom: '20px',
-            borderBottom: `1px solid ${theme.border}`,
-          }}
-        >
-          <div>
-            <div
-              style={{
-                fontSize: '9px',
-                letterSpacing: '3px',
-                color: theme.textDim,
-                textTransform: 'uppercase',
-                marginBottom: '6px',
-              }}
-            >
-              JustDo · {user?.username}
+      <div style={{ maxWidth: '1800px', margin: '0 auto' }}>
+        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <div style={{ fontSize: '12px', letterSpacing: '0.08em', color: theme.dim, textTransform: 'uppercase' }}>
+              {user?.username} · {pendingCount} pending
             </div>
-            <h1 style={{ fontSize: '24px', fontWeight: '300', margin: 0, color: isDark ? '#fff' : '#000' }}>
-              {pendingCount} <span style={{ color: theme.textDim, fontSize: '14px' }}>pending</span>
-            </h1>
+            <div style={{ fontSize: '14px', color: theme.text }}>{weekRangeLabel}</div>
           </div>
-          <div style={{ display: 'flex', gap: '8px' }}>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <button
-              onClick={() => setIsDark(!isDark)}
+              onClick={() => setWeekAnchor((prev) => shiftDateByDays(prev, -7))}
               style={{
-                background: 'transparent',
-                border: `1px solid ${theme.borderLight}`,
-                color: theme.textDim,
-                padding: '8px 12px',
+                background: theme.panel,
+                border: `1px solid ${theme.border}`,
+                color: theme.dim,
+                padding: '8px 10px',
+                cursor: 'pointer',
+                fontSize: '12px',
+              }}
+              aria-label="Previous week"
+              title="Previous week"
+            >
+              ‹
+            </button>
+            <button
+              onClick={() => setWeekAnchor(new Date())}
+              style={{
+                background: theme.panel,
+                border: `1px solid ${theme.border}`,
+                color: theme.dim,
+                padding: '8px 10px',
                 cursor: 'pointer',
                 fontSize: '12px',
               }}
             >
-              {isDark ? '☀' : '☾'}
+              Today
+            </button>
+            <button
+              onClick={() => setWeekAnchor((prev) => shiftDateByDays(prev, 7))}
+              style={{
+                background: theme.panel,
+                border: `1px solid ${theme.border}`,
+                color: theme.dim,
+                padding: '8px 10px',
+                cursor: 'pointer',
+                fontSize: '12px',
+              }}
+              aria-label="Next week"
+              title="Next week"
+            >
+              ›
             </button>
             <button
               onClick={logout}
               style={{
                 background: 'transparent',
-                border: `1px solid ${theme.borderLight}`,
-                color: theme.textDim,
-                padding: '8px 12px',
+                border: `1px solid ${theme.border}`,
+                color: theme.dim,
+                padding: '8px 10px',
                 cursor: 'pointer',
-                fontSize: '10px',
-                letterSpacing: '1px',
+                fontSize: '12px',
+                marginLeft: '8px',
               }}
             >
-              LOGOUT
+              Logout
             </button>
           </div>
         </header>
 
-        <section style={{ marginBottom: '24px' }}>
-          <div style={{ fontSize: '10px', color: theme.textDim, marginBottom: '8px', letterSpacing: '1px' }}>UPCOMING · WEEK</div>
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
-              gap: '8px',
-            }}
-          >
+        <div className="boardWrap">
+          <div className="weekBoard">
             {weekDays.map((day) => (
-              <div
+              <Lane
                 key={day.iso}
-                role="button"
-                tabIndex={0}
-                onClick={() => handleDayOpen(day.iso)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    handleDayOpen(day.iso);
-                  }
-                }}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  setDragOverDay(day.iso);
-                }}
-                onDragLeave={() => setDragOverDay(null)}
-                onDrop={(e) => handleDropOnDay(e, day.iso)}
-                style={{
-                  minHeight: '90px',
-                  padding: '10px',
-                  border: `1px solid ${dragOverDay === day.iso ? theme.accent : theme.borderLight}`,
-                  background: dragOverDay === day.iso ? theme.accentMuted : theme.bgCard,
-                  display: 'block',
-                  cursor: 'pointer',
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                  <span style={{ fontSize: '10px', color: day.isToday ? theme.accent : theme.textDim }}>{day.label}</span>
-                  <span style={{ fontSize: '10px', color: day.isToday ? theme.accent : theme.textMuted }}>{day.dayNumber}</span>
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  {(tasksByDay[day.iso] || []).slice(0, 3).map((task) => (
-                    <div key={task.id} style={{ fontSize: '10px', color: task.done ? theme.doneText : theme.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      • {task.text}
+                topLabel={formatDayHeaderTop(day.date)}
+                mainLabel={formatDayHeaderMain(day.date)}
+                laneKey={day.iso}
+                tasks={tasksByDay[day.iso] || []}
+                theme={theme}
+                draggedId={draggedId}
+                dropTarget={dropTarget}
+                onDragStart={handleDragStart}
+                onDragEnd={handleDragEnd}
+                onDragOverLane={handleDragOverLane}
+                onDragOverTask={handleDragOverTask}
+                onDropLane={handleDropOnLane}
+                onAddTask={handleAddInLane}
+                onToggleDone={(task) => updateTask(task.id, { done: !task.done })}
+                onDelete={(task) => deleteTask(task.id)}
+                isToday={day.isToday}
+              />
+            ))}
+          </div>
+        </div>
+
+        <div className="generalBoard">
+          <Lane
+            topLabel="GENERAL"
+            mainLabel="TASKS"
+            laneKey="general"
+            tasks={generalTasks}
+            theme={theme}
+            draggedId={draggedId}
+            dropTarget={dropTarget}
+            onDragStart={handleDragStart}
+            onDragEnd={handleDragEnd}
+            onDragOverLane={handleDragOverLane}
+            onDragOverTask={handleDragOverTask}
+            onDropLane={handleDropOnLane}
+            onAddTask={handleAddInLane}
+            onToggleDone={(task) => updateTask(task.id, { done: !task.done })}
+            onDelete={(task) => deleteTask(task.id)}
+          />
+        </div>
+
+        {(historyByDate.dates.length > 0 || laterByDate.dates.length > 0) && (
+          <div style={{ marginTop: '18px' }}>
+            {historyByDate.dates.length > 0 && (
+              <details style={{ borderTop: `1px solid ${theme.border}`, paddingTop: '12px' }}>
+                <summary style={{ cursor: 'pointer', color: theme.dim, fontSize: '11px', letterSpacing: '1px' }}>
+                  HISTORY · {historyByDate.dates.length} day{historyByDate.dates.length === 1 ? '' : 's'}
+                </summary>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '10px' }}>
+                  {historyByDate.dates.map((iso) => (
+                    <div key={iso} style={{ border: `1px solid ${theme.border}`, background: theme.card, padding: '10px' }}>
+                      <div style={{ color: theme.dim, fontSize: '11px', marginBottom: '8px' }}>
+                        {formatIsoLabel(iso)} · {historyByDate.grouped.get(iso).length}
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        {historyByDate.grouped.get(iso).map((task) => (
+                          <TaskRow
+                            key={task.id}
+                            task={task}
+                            laneKey={laneKeyForScheduledFor(task.scheduled_for)}
+                            theme={theme}
+                            draggedId={draggedId}
+                            dropTarget={null}
+                            onDragStart={handleDragStart}
+                            onDragEnd={handleDragEnd}
+                            onDragOverTask={() => {}}
+                            onDropTask={() => {}}
+                            onToggleDone={() => updateTask(task.id, { done: !task.done })}
+                            onDelete={() => deleteTask(task.id)}
+                            draggable
+                          />
+                        ))}
+                      </div>
                     </div>
                   ))}
-                  {(tasksByDay[day.iso] || []).length > 3 && (
-                    <div style={{ fontSize: '10px', color: theme.textDim }}>+{tasksByDay[day.iso].length - 3} more</div>
-                  )}
                 </div>
-              </div>
-            ))}
-          </div>
-        </section>
+              </details>
+            )}
 
-        <div style={{ display: 'flex', gap: '8px', marginBottom: '24px' }}>
-          <input
-            type="text"
-            value={newTask}
-            onChange={(e) => setNewTask(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleAddTask()}
-            placeholder="New task..."
-            style={{
-              flex: 1,
-              background: theme.bgCard,
-              border: `1px solid ${theme.borderLight}`,
-              color: theme.text,
-              padding: '12px 16px',
-              fontSize: '13px',
-              fontFamily: 'inherit',
-            }}
-          />
-          <input
-            type="text"
-            value={newTag}
-            onChange={(e) => setNewTag(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleAddTask()}
-            placeholder="tag"
-            style={{
-              width: '100px',
-              background: theme.bgCard,
-              border: `1px solid ${theme.borderLight}`,
-              color: theme.textMuted,
-              padding: '12px',
-              fontSize: '11px',
-              fontFamily: 'inherit',
-              textAlign: 'center',
-            }}
-          />
-          <button
-            onClick={handleAddTask}
-            style={{
-              background: 'transparent',
-              border: `1px solid ${theme.borderLight}`,
-              color: theme.textDim,
-              padding: '12px 16px',
-              cursor: 'pointer',
-              fontSize: '14px',
-            }}
-          >
-            +
-          </button>
-        </div>
-
-        {allTags.length > 0 && (
-          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '20px' }}>
-            <button
-              onClick={() => setFilterTag(null)}
-              style={{
-                background: !filterTag ? theme.accentMuted : 'transparent',
-                border: `1px solid ${!filterTag ? theme.accent : theme.borderLight}`,
-                color: !filterTag ? theme.accent : theme.textDim,
-                padding: '4px 10px',
-                fontSize: '10px',
-                cursor: 'pointer',
-              }}
-            >
-              all
-            </button>
-            {allTags.map((tag) => (
-              <button
-                key={tag}
-                onClick={() => setFilterTag(filterTag === tag ? null : tag)}
-                style={{
-                  background: filterTag === tag ? theme.accentMuted : 'transparent',
-                  border: `1px solid ${filterTag === tag ? theme.accent : theme.borderLight}`,
-                  color: filterTag === tag ? theme.accent : theme.textDim,
-                  padding: '4px 10px',
-                  fontSize: '10px',
-                  cursor: 'pointer',
-                }}
-              >
-                {tag}
-              </button>
-            ))}
+            {laterByDate.dates.length > 0 && (
+              <details style={{ borderTop: `1px solid ${theme.border}`, paddingTop: '12px', marginTop: '12px' }}>
+                <summary style={{ cursor: 'pointer', color: theme.dim, fontSize: '11px', letterSpacing: '1px' }}>
+                  LATER · {laterByDate.dates.length} day{laterByDate.dates.length === 1 ? '' : 's'}
+                </summary>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '10px' }}>
+                  {laterByDate.dates.map((iso) => (
+                    <div key={iso} style={{ border: `1px solid ${theme.border}`, background: theme.card, padding: '10px' }}>
+                      <div style={{ color: theme.dim, fontSize: '11px', marginBottom: '8px' }}>
+                        {formatIsoLabel(iso)} · {laterByDate.grouped.get(iso).length}
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        {laterByDate.grouped.get(iso).map((task) => (
+                          <TaskRow
+                            key={task.id}
+                            task={task}
+                            laneKey={laneKeyForScheduledFor(task.scheduled_for)}
+                            theme={theme}
+                            draggedId={draggedId}
+                            dropTarget={null}
+                            onDragStart={handleDragStart}
+                            onDragEnd={handleDragEnd}
+                            onDragOverTask={() => {}}
+                            onDropTask={() => {}}
+                            onToggleDone={() => updateTask(task.id, { done: !task.done })}
+                            onDelete={() => deleteTask(task.id)}
+                            draggable
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
           </div>
         )}
+      </div>
+    </div>
+  );
+};
 
-        
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-          {filteredTasks.map((task) => (
-            <div
-              key={task.id}
-              className="task-row"
-              draggable
-              onDragStart={(e) => handleDragStart(e, task.id)}
-              onDragOver={(e) => handleDragOver(e, task.id)}
-              onDragLeave={() => setDragOverId(null)}
-              onDrop={(e) => handleDrop(e, task.id)}
-              onDragEnd={handleDragEnd}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '12px',
-                padding: '14px 16px',
-                backgroundColor: dragOverId === task.id ? theme.accentMuted : task.done ? theme.done : theme.bgCard,
-                border: `1px solid ${dragOverId === task.id ? theme.accent : theme.borderLight}`,
-                opacity: draggedId === task.id ? 0.5 : 1,
-                transition: 'background-color 0.15s ease, border-color 0.15s ease',
-              }}
-            >              
-              <div className="drag-handle" style={{ cursor: 'grab', color: theme.dragHandle, fontSize: '10px', opacity: 0.6, userSelect: 'none' }}>
-                ⋮⋮
-              </div>
+const Lane = ({
+  topLabel,
+  mainLabel,
+  laneKey,
+  tasks,
+  theme,
+  draggedId,
+  dropTarget,
+  onDragStart,
+  onDragEnd,
+  onDragOverLane,
+  onDragOverTask,
+  onDropLane,
+  onAddTask,
+  onToggleDone,
+  onDelete,
+  isToday,
+}) => {
+  const [draft, setDraft] = useState('');
 
-              <button
-                onClick={() => updateTask(task.id, { done: !task.done })}
-                style={{
-                  width: '18px',
-                  height: '18px',
-                  border: `1px solid ${task.done ? theme.accent : theme.textDimmer}`,
-                  background: task.done ? theme.accent : 'transparent',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  flexShrink: 0,
-                }}
-              >
-                {task.done && <span style={{ color: isDark ? '#000' : '#fff', fontSize: '11px' }}>✓</span>}
-              </button>
+  return (
+    <div
+      className="lane"
+      onDragOver={(e) => onDragOverLane(e, laneKey)}
+      onDrop={(e) => onDropLane(e, laneKey, dropTarget?.laneKey === laneKey ? dropTarget.beforeTaskId : null)}
+      style={{
+        background: 'transparent',
+      }}
+    >
+      <div className="laneHeader">
+        <div className="laneTop">{topLabel}</div>
+        <div className={`laneMain ${isToday ? 'laneMainToday' : ''}`}>{mainLabel}</div>
+      </div>
 
-              <span
-                style={{
-                  flex: 1,
-                  fontSize: '13px',
-                  color: task.done ? theme.doneText : theme.text,
-                  textDecoration: task.done ? 'line-through' : 'none',
-                }}
-              >
-                {task.text}
-              </span>
+      <div className="laneDivider" />
 
-              {editingTag === task.id ? (
-                <input
-                  type="text"
-                  defaultValue={task.tag || ''}
-                  onBlur={(e) => handleUpdateTag(task.id, e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleUpdateTag(task.id, e.target.value);
-                    if (e.key === 'Escape') setEditingTag(null);
-                  }}
-                  autoFocus
-                  style={{
-                    width: '80px',
-                    background: 'transparent',
-                    border: `1px solid ${theme.accent}`,
-                    color: theme.textMuted,
-                    padding: '2px 6px',
-                    fontSize: '10px',
-                    fontFamily: 'inherit',
-                    textAlign: 'center',
-                  }}
-                />
-              ) : (
-                <button
-                  onClick={() => setEditingTag(task.id)}
-                  style={{
-                    background: task.tag ? theme.accentMuted : 'transparent',
-                    border: `1px solid ${task.tag ? 'transparent' : theme.borderLight}`,
-                    color: task.tag ? theme.accent : theme.textDimmer,
-                    padding: '2px 8px',
-                    fontSize: '10px',
-                    cursor: 'pointer',
-                    minWidth: '50px',
-                  }}
-                >
-                  {task.tag || '+tag'}
-                </button>
-              )}
+      <div
+        className="laneBody"
+        onDragOver={(e) => onDragOverLane(e, laneKey)}
+        onDrop={(e) => {
+          e.stopPropagation();
+          onDropLane(e, laneKey, null);
+        }}
+      >
+        {tasks.map((task) => (
+          <TaskRow
+            key={task.id}
+            task={task}
+            laneKey={laneKey}
+            theme={theme}
+            draggedId={draggedId}
+            dropTarget={dropTarget}
+            onDragStart={onDragStart}
+            onDragEnd={onDragEnd}
+            onDragOverTask={onDragOverTask}
+            onDropTask={onDropLane}
+            onToggleDone={() => onToggleDone(task)}
+            onDelete={() => onDelete(task)}
+            draggable
+          />
+        ))}
 
-              <button
-                onClick={() => deleteTask(task.id)}
-                style={{
-                  background: 'transparent',
-                  border: 'none',
-                  color: theme.textDimmer,
-                  cursor: 'pointer',
-                  padding: '4px 6px',
-                  fontSize: '12px',
-                }}
-              >
-                ×
-              </button>
-            </div>
-          ))}
+        <div className="laneAdd">
+          <input
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={async (e) => {
+              if (e.key !== 'Enter') return;
+              e.preventDefault();
+              const next = draft.trim();
+              if (!next) return;
+              await onAddTask?.(laneKey, next);
+              setDraft('');
+            }}
+            onDragOver={(e) => onDragOverLane(e, laneKey)}
+            onDrop={(e) => {
+              e.stopPropagation();
+              onDropLane(e, laneKey, null);
+            }}
+            aria-label={`Add task to ${laneKey === 'general' ? 'general' : laneKey}`}
+          />
         </div>
+      </div>
+    </div>
+  );
+};
 
+const TaskRow = ({
+  task,
+  laneKey,
+  theme,
+  draggedId,
+  dropTarget,
+  onDragStart,
+  onDragEnd,
+  onDragOverTask,
+  onDropTask,
+  onToggleDone,
+  onDelete,
+  draggable,
+}) => {
+  const isDragging = draggedId === task.id;
 
-        <div style={{ textAlign: 'center', padding: '48px 24px', color: theme.textDim, fontSize: '13px' }}>
-          {filterTag ? `No unscheduled tasks tagged "${filterTag}"` : 'No unscheduled tasks'}
-        </div>
-        
+  return (
+    <div
+      draggable={draggable}
+      onDragStart={(e) => onDragStart(e, task.id)}
+      onDragEnd={onDragEnd}
+      onDragOver={(e) => {
+        e.stopPropagation();
+        onDragOverTask(e, laneKey, task.id);
+      }}
+      onDrop={(e) => {
+        e.stopPropagation();
+        onDropTask(e, laneKey, task.id);
+      }}
+      className="taskRow"
+      style={{ opacity: isDragging ? 0.55 : 1 }}
+    >
+      <input
+        type="checkbox"
+        className="checkBox"
+        checked={!!task.done}
+        onChange={onToggleDone}
+        draggable={false}
+        onDragStart={(e) => e.preventDefault()}
+        aria-label={task.done ? 'Mark as not done' : 'Mark as done'}
+      />
 
-        <footer
-          style={{
-            marginTop: '32px',
-            paddingTop: '20px',
-            borderTop: `1px solid ${theme.border}`,
-            display: 'flex',
-            justifyContent: 'space-between',
-            fontSize: '10px',
-            color: theme.textDim,
-          }}
+      <div className={`taskText ${task.done ? 'taskDone' : ''}`}>{task.text}</div>
+
+      <div className="taskControls">
+        <button
+          onClick={onDelete}
+          className="iconBtn"
+          aria-label="Delete task"
+          title="Delete"
+          draggable={false}
+          onDragStart={(e) => e.preventDefault()}
         >
-          <span>{tasks.length} total</span>
-          <span>{tasks.filter((t) => t.done).length} done</span>
-        </footer>
+          ×
+        </button>
       </div>
     </div>
   );

@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from django.db import models
+from django.db.models import Max
 from .models import Task
 
 
@@ -11,13 +12,11 @@ class TaskSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         user = self.context['request'].user
-        print("Creating task for user:", user)
-        print("Validated data:", validated_data)
-
         validated_data['user'] = user
-        validated_data['order'] = 0
-
-        Task.objects.filter(user=user).update(order=models.F('order') + 1)
+        current_max = (
+            Task.objects.filter(user=user).aggregate(max_order=Max('order')).get('max_order')
+        )
+        validated_data['order'] = (current_max if current_max is not None else -1) + 1
 
         return super().create(validated_data)
 

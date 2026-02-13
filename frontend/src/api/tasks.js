@@ -6,8 +6,8 @@ export const tasksApi = {
     return response.data;
   },
 
-  create: async (text, tag = null) => {
-    const response = await client.post('/tasks/', { text, tag });
+  create: async ({ text, tag = null, scheduled_for = null } = {}) => {
+    const response = await client.post('/tasks/', { text, tag, scheduled_for });
     return response.data;
   },
 

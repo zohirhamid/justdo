@@ -6,6 +6,16 @@ export const useTasks = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
+  const sortTasks = (list) =>
+    [...list].sort((a, b) => {
+      const ao = typeof a.order === 'number' ? a.order : 0;
+      const bo = typeof b.order === 'number' ? b.order : 0;
+      if (ao !== bo) return ao - bo;
+      const at = a.created_at || '';
+      const bt = b.created_at || '';
+      return at < bt ? -1 : at > bt ? 1 : 0;
+    });
+
   const fetchTasks = useCallback(async () => {
     try {
       setLoading(true);
@@ -23,21 +33,21 @@ export const useTasks = () => {
     fetchTasks();
   }, [fetchTasks]);
 
-  const addTask = async (text, tag) => {
-    const newTask = await tasksApi.create(text, tag);
-    setTasks([newTask, ...tasks]);
+  const addTask = async (text, { tag = null, scheduled_for = null } = {}) => {
+    const newTask = await tasksApi.create({ text, tag, scheduled_for });
+    setTasks((prev) => sortTasks([...prev, newTask]));
     return newTask;
   };
 
   const updateTask = async (id, data) => {
     const updated = await tasksApi.update(id, data);
-    setTasks(tasks.map(t => t.id === id ? updated : t));
+    setTasks((prev) => prev.map((t) => (t.id === id ? updated : t)));
     return updated;
   };
 
   const deleteTask = async (id) => {
     await tasksApi.delete(id);
-    setTasks(tasks.filter(t => t.id !== id));
+    setTasks((prev) => prev.filter((t) => t.id !== id));
   };
 
   const reorderTasks = async (newOrder) => {
